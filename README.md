@@ -17,6 +17,7 @@ modelu językowego; potem aplikacja działa offline.
 - [Skrypty](#skrypty)
 - [Architektura](#architektura)
 - [Model danych](#model-danych)
+- [Import materiałów](#import-materiałów)
 - [Potok AI](#potok-ai)
 - [Algorytm SM-2](#algorytm-sm-2)
 - [Tryb offline i PWA](#tryb-offline-i-pwa)
@@ -24,6 +25,7 @@ modelu językowego; potem aplikacja działa offline.
 - [Wdrożenie](#wdrożenie)
 - [Bez zewnętrznych usług](#bez-zewnętrznych-usług)
 - [Publikacja przez GitHub](#publikacja-przez-github)
+- [Dobór modelu do urządzenia](#dobór-modelu-do-urządzenia)
 - [Wymagania przeglądarki](#wymagania-przeglądarki)
 - [Testy i jakość kodu](#testy-i-jakość-kodu)
 - [Decyzje projektowe](#decyzje-projektowe)
@@ -34,13 +36,14 @@ modelu językowego; potem aplikacja działa offline.
 
 | Widok | Co robi |
 | --- | --- |
-| `/dashboard` | Liczniki powtórek, lista talii z postępem, prognoza 7 dni, status silnika AI, import materiału |
+| `/dashboard` | Liczniki powtórek, lista talii z postępem, prognoza 7 dni, status silnika AI, import materiałów (PDF, Word, tekst, markdown — także wiele plików naraz) |
 | `/documents/:id` | Podzielony warsztat: materiał źródłowy i kompendium po lewej, filtrowalna i edytowalna lista fiszek po prawej, przycisk „Generuj fiszki” |
 | `/study/:deckId` | Tryb nauki bez rozproszeń: obrót 3D lub odsłanianie luki, skróty klawiszowe, podgląd cytatu źródłowego, cofanie oceny |
 | `/settings` | Wybór i zarządzanie modelem, zajętość pamięci, kopia zapasowa (eksport/import JSON), motyw, kasowanie danych |
 
 Dodatkowo:
 
+- import wielu plików naraz: **PDF**, **Word (.docx)**, **.txt** i **.md** — parsowane w przeglądarce,
 - trzy typy fiszek: `basic` (pytanie–odpowiedź), `cloze` (`{{c1::fraza}}`), `case` (scenariusz praktyczny),
 - **każda wygenerowana fiszka ma cytat źródłowy zweryfikowany względem materiału** (patrz [Potok AI](#potok-ai)),
 - ręczne dodawanie i edycja fiszek z walidacją składni luk,
@@ -125,6 +128,32 @@ Baza `CognitiveDeckDB` (Dexie, wersja 1):
 Indeksowane są tylko pola, po których realnie filtrujemy lub sortujemy — indeks na `rawContent`
 czy `front` powiększałby bazę bez żadnej korzyści. Złożony indeks `[deckId+dueDate]` obsługuje
 najczęstsze zapytanie aplikacji: „co jest do powtórki w tej talii”.
+
+## Import materiałów
+
+Pliki są czytane w całości po stronie przeglądarki — żaden bajt nie trafia na serwer.
+
+| Format | Biblioteka | Uwagi |
+| --- | --- | --- |
+| `.txt`, `.md` | — | odczyt natywny |
+| `.pdf` | `pdfjs-dist` | tekst składany wg znacznika `hasEOL`, sklejanie wyrazów przenoszonych myślnikiem |
+| `.docx` | `mammoth` | nagłówki, listy, tabele i pogrubienia zachowane jako markdown |
+
+Zachowanie:
+
+- **wiele plików naraz** — domyślnie każdy plik to osobny materiał z własną talią;
+  opcja *Połącz w jeden materiał* scala je w jeden dokument z sekcjami `##`,
+- **błąd jednego pliku nie przerywa reszty** — pozostałe wczytują się normalnie,
+  a lista odrzuconych plików pokazuje konkretny powód,
+- **skan PDF bez warstwy tekstowej** jest rozpoznawany i odrzucany z jasnym komunikatem
+  (OCR nie jest wbudowany),
+- pliki o tej samej nazwie i różnych rozszerzeniach dostają w tytule dopisek formatu,
+- limit pojedynczego pliku to 25 MB; `.doc`, `.rtf`, `.odt` i prezentacje są odrzucane z podpowiedzią,
+  na co je przekonwertować.
+
+Parsery (`pdfjs-dist` ~437 kB, worker ~1,3 MB) ładują się dynamicznie — dopiero przy pierwszym
+imporcie PDF-a. Kto wkleja tekst, nigdy ich nie pobiera.
+
 
 ## Potok AI
 
@@ -341,6 +370,23 @@ Jeśli chcesz tylko uruchomić aplikację, bez publikowania:
 Model i tak liczy się w Twojej przeglądarce, na Twoim GPU — Codespace tylko serwuje pliki.
 Przekierowany port ustaw jako **Public**, jeśli chcesz otworzyć adres na telefonie.
 
+## Dobór modelu do urządzenia
+
+Nie każdy układ graficzny obsługuje te same modele, dlatego lista w panelu jest filtrowana:
+
+- **brak rozszerzenia `shader-f16`** (częste na starszych układach mobilnych) — pokazywane są
+  wyłącznie warianty **(f32)**; modele f16 nie skompilowałyby się w ogóle,
+- **urządzenie mobilne** — pokazywane są tylko modele mieszczące się w limicie pamięci karty
+  przeglądarki (0.5B–1B),
+- **zapamiętany model niezgodny z urządzeniem** jest automatycznie podmieniany na zgodny,
+  z informacją w panelu,
+- błędy ładowania (`out of memory`, `device lost`, brak `shader-f16`) są tłumaczone na konkretną
+  podpowiedź, co zrobić dalej.
+
+Na telefonie realnie działają modele 0.5B–1B. Jeżeli nawet one nie ruszają — dotyczy to zwłaszcza
+iPhone'ów, gdzie limit pamięci na kartę jest niski — wygeneruj fiszki na komputerze i przenieś je
+kopią zapasową (opisane w [Instalacji na telefonie](#instalacja-na-telefonie)).
+
 ## Wymagania przeglądarki
 
 | Funkcja | Wymaganie |
@@ -354,7 +400,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 43 testy: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 68 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```

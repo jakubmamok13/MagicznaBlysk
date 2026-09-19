@@ -26,7 +26,7 @@ import {
 } from '@/components/ui/select';
 import { useToast } from '@/components/ui/toast';
 import { useEngine } from '@/hooks/use-engine';
-import { MODEL_OPTIONS, findModel } from '@/lib/models';
+import { compatibleModels, findModel } from '@/lib/models';
 import { cn, errorMessage } from '@/lib/utils';
 import { llmEngine, type EngineState } from '@/services/ai/engine';
 
@@ -94,6 +94,10 @@ export function EnginePanel({
   const { toast } = useToast();
   const [busyAction, setBusyAction] = useState<'load' | 'unload' | 'remove' | null>(null);
   const model = findModel(state.modelId);
+  // Pokazujemy wyłącznie modele, które mają szansę ruszyć na tym sprzęcie.
+  const available = compatibleModels(state.profile);
+  const filteredForF16 = state.profile.supportsF16 === false;
+  const filteredForMobile = state.profile.isMobile;
 
   useEffect(() => {
     void llmEngine.initialize();
@@ -183,14 +187,19 @@ export function EnginePanel({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {MODEL_OPTIONS.map((option) => (
+              {available.map((option) => (
                 <SelectItem key={option.id} value={option.id}>
                   <span className="flex flex-col gap-0.5">
                     <span className="flex items-center gap-2 font-medium">
                       {option.label}
-                      {option.recommended === true && (
+                      {option.recommended === true && !state.profile.isMobile && (
                         <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
                           zalecany
+                        </Badge>
+                      )}
+                      {option.mobileFriendly === true && state.profile.isMobile && (
+                        <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
+                          na telefon
                         </Badge>
                       )}
                     </span>
@@ -222,6 +231,21 @@ export function EnginePanel({
           </div>
         </div>
 
+        {(filteredForF16 || filteredForMobile) && (
+          <p className="text-xs text-muted-foreground">
+            {filteredForF16
+              ? 'Ta karta graficzna nie obsługuje obliczeń f16 — lista zawiera warianty „(f32)”, które na niej działają.'
+              : 'Wykryto urządzenie mobilne — pokazujemy modele mieszczące się w limicie pamięci przeglądarki na telefonie.'}
+          </p>
+        )}
+
+        {state.autoSwitchedFrom !== null && (
+          <p className="rounded-md bg-accent/60 p-2.5 text-xs text-accent-foreground">
+            Poprzednio wybrany model ({state.autoSwitchedFrom}) nie zadziała na tym urządzeniu —
+            ustawiono zgodny zamiennik.
+          </p>
+        )}
+
         {isLoading && (
           <div className="space-y-2" aria-live="polite">
             <Progress value={percent} indeterminate={percent === 0} />
@@ -235,14 +259,7 @@ export function EnginePanel({
         {state.error !== null && !isLoading && (
           <p className="flex items-start gap-2 rounded-md bg-destructive/10 p-2.5 text-xs text-destructive">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-            <span>{state.error}</span>
-          </p>
-        )}
-
-        {state.webgpu.supportsF16 === false && (
-          <p className="flex items-start gap-2 rounded-md bg-warning/10 p-2.5 text-xs text-warning">
-            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-            <span>{state.webgpu.reason}</span>
+            <span className="whitespace-pre-line">{state.error}</span>
           </p>
         )}
 

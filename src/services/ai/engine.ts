@@ -4,14 +4,18 @@ import type {
   MLCEngineInterface,
 } from '@mlc-ai/web-llm';
 
-import { detectWebGPU, type WebGPUReport } from '@/lib/webgpu';
+import { deviceMemoryGb, detectWebGPU, type WebGPUReport } from '@/lib/webgpu';
 import {
   DEFAULT_MODEL_ID,
+  detectMobile,
+  isModelCompatible,
   loadCachedModelIds,
   loadPreferredModelId,
   markModelCached,
+  recommendModel,
   savePreferredModelId,
   unmarkModelCached,
+  type DeviceProfile,
 } from '@/lib/models';
 import { errorMessage } from '@/lib/utils';
 
@@ -58,6 +62,13 @@ export interface EngineState {
   cached: boolean;
   /** Czy trwa generowanie odpowiedzi. */
   busy: boolean;
+  /** Możliwości urządzenia — sterują listą dostępnych modeli. */
+  profile: DeviceProfile;
+  /**
+   * Ustawione, gdy zapamiętany model nie działałby na tym urządzeniu
+   * i został automatycznie podmieniony na zgodny.
+   */
+  autoSwitchedFrom: string | null;
 }
 
 const INITIAL_STATE: EngineState = {
@@ -70,6 +81,8 @@ const INITIAL_STATE: EngineState = {
   webgpu: { status: 'unknown' },
   cached: false,
   busy: false,
+  profile: { supportsF16: undefined, isMobile: false, memoryGb: undefined },
+  autoSwitchedFrom: null,
 };
 
 export interface GenerateJsonOptions {
@@ -132,10 +145,32 @@ class LLMEngineService {
       return this.state;
     }
 
+    const profile: DeviceProfile = {
+      supportsF16: report.supportsF16,
+      isMobile: detectMobile(),
+      memoryGb: deviceMemoryGb(),
+    };
+
+    /**
+     * Zapamiętany model może nie pasować do tego urządzenia — np. wariant f16
+     * na karcie bez `shader-f16` albo duży model na telefonie. Podmieniamy go
+     * na zgodny, zamiast pozwolić użytkownikowi trafić na błąd kompilacji.
+     */
+    let modelId = this.state.modelId;
+    let autoSwitchedFrom: string | null = null;
+    if (!isModelCompatible(modelId, profile)) {
+      autoSwitchedFrom = modelId;
+      modelId = recommendModel(profile);
+      savePreferredModelId(modelId);
+    }
+
     this.setState({
       status: 'unloaded',
       webgpu: report,
-      cached: await this.isModelCached(this.state.modelId),
+      profile,
+      modelId,
+      autoSwitchedFrom,
+      cached: await this.isModelCached(modelId),
     });
     return this.state;
   }
@@ -229,7 +264,7 @@ class LLMEngineService {
         error: null,
       });
     } catch (error) {
-      const message = errorMessage(error);
+      const message = explainLoadError(errorMessage(error), this.state.profile);
       this.setState({
         status: 'error',
         error: message,
@@ -324,6 +359,37 @@ class LLMEngineService {
       return null;
     }
   }
+}
+
+/**
+ * Surowe błędy WebGPU/WebLLM są nieczytelne ("Device lost", "out of memory",
+ * "buffer size exceeds limit"). Dokładamy wskazówkę, co z tym zrobić —
+ * na telefonie prawie zawsze chodzi o limit pamięci karty przeglądarki.
+ */
+export function explainLoadError(message: string, profile: DeviceProfile): string {
+  const lower = message.toLowerCase();
+
+  if (lower.includes('shader-f16') || lower.includes('f16')) {
+    return `${message}\n\nTa karta graficzna nie obsługuje obliczeń f16. Wybierz model z dopiskiem „(f32)”.`;
+  }
+
+  if (
+    lower.includes('out of memory') ||
+    lower.includes('oom') ||
+    lower.includes('device lost') ||
+    lower.includes('exceeds') ||
+    lower.includes('allocation')
+  ) {
+    return profile.isMobile
+      ? `${message}\n\nNa telefonie zabrakło pamięci dla modelu. Wybierz mniejszy model (0.5B), zamknij inne karty i spróbuj ponownie. Część telefonów — zwłaszcza iPhone — ma limit pamięci zbyt niski nawet dla najmniejszych modeli; wtedy fiszki wygeneruj na komputerze i przenieś je kopią zapasową.`
+      : `${message}\n\nZabrakło pamięci GPU. Wybierz mniejszy model albo zamknij inne aplikacje korzystające z karty graficznej.`;
+  }
+
+  if (lower.includes('fetch') || lower.includes('network') || lower.includes('failed to load')) {
+    return `${message}\n\nNie udało się pobrać wag modelu. Sprawdź połączenie z internetem — pierwsze uruchomienie wymaga pobrania pliku modelu.`;
+  }
+
+  return message;
 }
 
 function readInitialModelId(): string {

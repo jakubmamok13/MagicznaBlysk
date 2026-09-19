@@ -1,5 +1,13 @@
 /** Katalog modeli dostępnych lokalnie przez WebLLM. */
 
+/**
+ * Precyzja wag.
+ * `f16` wymaga rozszerzenia WebGPU `shader-f16` — nie mają go m.in. starsze
+ * układy mobilne. Dla takich urządzeń potrzebne są warianty `f32`
+ * (nieco większe, ale działające wszędzie tam, gdzie jest WebGPU).
+ */
+export type ModelPrecision = 'f16' | 'f32';
+
 export interface ModelOption {
   /** Identyfikator modelu w `prebuiltAppConfig` WebLLM. */
   id: string;
@@ -9,18 +17,22 @@ export interface ModelOption {
   /** Wymagana pamięć VRAM podawana przez WebLLM. */
   vramMb: number;
   description: string;
-  /** Rekomendowany domyślnie (najlepszy stosunek jakości do rozmiaru). */
+  precision: ModelPrecision;
+  /** Rekomendowany domyślnie na komputerze. */
   recommended?: boolean;
+  /** Mieści się w limitach pamięci typowego telefonu. */
+  mobileFriendly?: boolean;
 }
 
 export const MODEL_OPTIONS: readonly ModelOption[] = [
+  /* ----------------------------- warianty f16 ---------------------------- */
   {
     id: 'Llama-3.2-3B-Instruct-q4f16_1-MLC',
     label: 'Llama 3.2 3B Instruct',
     downloadSize: '~1,8 GB',
     vramMb: 2264,
-    description:
-      'Najlepsza jakość kompendium i fiszek. Zalecana na komputerze z min. 8 GB RAM.',
+    precision: 'f16',
+    description: 'Najlepsza jakość kompendium i fiszek. Na komputer z min. 8 GB RAM.',
     recommended: true,
   },
   {
@@ -28,21 +40,63 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
     label: 'Qwen 2.5 1.5B Instruct',
     downloadSize: '~1,1 GB',
     vramMb: 1629,
-    description: 'Szybki kompromis — dobra praca z językiem polskim i strukturą JSON.',
+    precision: 'f16',
+    description: 'Szybki kompromis — dobrze radzi sobie z polskim i strukturą JSON.',
   },
   {
     id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
     label: 'Llama 3.2 1B Instruct',
     downloadSize: '~0,7 GB',
     vramMb: 879,
-    description: 'Najlżejszy wariant na słabsze urządzenia i telefony z WebGPU.',
+    precision: 'f16',
+    description: 'Lekki model na telefon i słabsze komputery.',
+    mobileFriendly: true,
   },
   {
-    id: 'Qwen2.5-3B-Instruct-q4f16_1-MLC',
-    label: 'Qwen 2.5 3B Instruct',
-    downloadSize: '~1,9 GB',
-    vramMb: 2504,
-    description: 'Mocny model o dużej precyzji cytowania źródeł.',
+    id: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
+    label: 'Qwen 2.5 0.5B Instruct',
+    downloadSize: '~0,5 GB',
+    vramMb: 945,
+    precision: 'f16',
+    description: 'Najmniejszy sensowny model — ostatnia deska ratunku na telefonie.',
+    mobileFriendly: true,
+  },
+
+  /* ----------------- warianty f32 (GPU bez shader-f16) ------------------- */
+  {
+    id: 'Llama-3.2-3B-Instruct-q4f32_1-MLC',
+    label: 'Llama 3.2 3B Instruct (f32)',
+    downloadSize: '~2,3 GB',
+    vramMb: 2951,
+    precision: 'f32',
+    description: 'Wariant dla kart bez shader-f16. Największe wymagania pamięci.',
+  },
+  {
+    id: 'Qwen2.5-1.5B-Instruct-q4f32_1-MLC',
+    label: 'Qwen 2.5 1.5B Instruct (f32)',
+    downloadSize: '~1,4 GB',
+    vramMb: 1888,
+    precision: 'f32',
+    description: 'Zrównoważony wybór dla kart bez shader-f16.',
+    recommended: true,
+  },
+  {
+    id: 'Llama-3.2-1B-Instruct-q4f32_1-MLC',
+    label: 'Llama 3.2 1B Instruct (f32)',
+    downloadSize: '~0,9 GB',
+    vramMb: 1129,
+    precision: 'f32',
+    description: 'Lekki wariant bez shader-f16 — na telefon i starsze karty.',
+    mobileFriendly: true,
+  },
+  {
+    id: 'Qwen2.5-0.5B-Instruct-q4f32_1-MLC',
+    label: 'Qwen 2.5 0.5B Instruct (f32)',
+    downloadSize: '~0,6 GB',
+    vramMb: 1066,
+    precision: 'f32',
+    description: 'Najmniejszy wariant bez shader-f16.',
+    mobileFriendly: true,
   },
 ] as const;
 
@@ -56,6 +110,62 @@ export function findModel(modelId: string): ModelOption | undefined {
 
 export function modelLabel(modelId: string): string {
   return findModel(modelId)?.label ?? modelId;
+}
+
+/* -------------------------------------------------------------------------- */
+/*                     Dobór modelu do możliwości urządzenia                  */
+/* -------------------------------------------------------------------------- */
+
+export interface DeviceProfile {
+  /** Czy GPU obsługuje `shader-f16`. `undefined` = jeszcze nie wiadomo. */
+  supportsF16: boolean | undefined;
+  /** Czy to urządzenie mobilne (ostrzejsze limity pamięci na kartę). */
+  isMobile: boolean;
+  /** Przybliżona pamięć urządzenia w GB, jeśli przeglądarka ją podaje. */
+  memoryGb: number | undefined;
+}
+
+/** Modele, które mają szansę zadziałać na tym urządzeniu. */
+export function compatibleModels(profile: DeviceProfile): ModelOption[] {
+  const list = MODEL_OPTIONS.filter((model) => {
+    // Bez shader-f16 warianty f16 nie skompilują się w ogóle.
+    if (profile.supportsF16 === false && model.precision === 'f16') return false;
+    return true;
+  });
+
+  // Na telefonie ukrywamy modele, które i tak przekroczą limit pamięci karty.
+  const mobileList = list.filter((model) => model.mobileFriendly === true);
+  return profile.isMobile && mobileList.length > 0 ? mobileList : list;
+}
+
+/** Najlepszy domyślny model dla wykrytego urządzenia. */
+export function recommendModel(profile: DeviceProfile): string {
+  const available = compatibleModels(profile);
+  if (available.length === 0) return DEFAULT_MODEL_ID;
+
+  if (profile.isMobile || (profile.memoryGb !== undefined && profile.memoryGb <= 4)) {
+    // Najmniejszy dostępny — na telefonie liczy się, żeby cokolwiek ruszyło.
+    return [...available].sort((a, b) => a.vramMb - b.vramMb)[0]?.id ?? DEFAULT_MODEL_ID;
+  }
+
+  const recommended = available.find((model) => model.recommended === true);
+  return recommended?.id ?? available[0]?.id ?? DEFAULT_MODEL_ID;
+}
+
+/** Czy wybrany model w ogóle ma szansę zadziałać na tym urządzeniu. */
+export function isModelCompatible(modelId: string, profile: DeviceProfile): boolean {
+  return compatibleModels(profile).some((model) => model.id === modelId);
+}
+
+/** Wykrywa urządzenie mobilne — na nim limity pamięci są znacznie ostrzejsze. */
+export function detectMobile(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const uaData = (navigator as Navigator & { userAgentData?: { mobile?: boolean } }).userAgentData;
+  if (typeof uaData?.mobile === 'boolean') return uaData.mobile;
+  if (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) {
+    return Math.min(screen.width, screen.height) < 820;
+  }
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
 }
 
 /** Zapamiętany wybór modelu (localStorage może być zablokowany — czytamy defensywnie). */

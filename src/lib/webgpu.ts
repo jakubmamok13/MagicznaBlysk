@@ -46,7 +46,7 @@ export async function detectWebGPU(): Promise<WebGPUReport> {
         ? {}
         : {
             reason:
-              'Karta nie obsługuje rozszerzenia shader-f16. Wybierz model w wariancie q4f32_1 lub użyj innego urządzenia.',
+              'Karta nie obsługuje rozszerzenia shader-f16 — dostępne będą wyłącznie modele w wariancie „(f32)”.',
           }),
     };
   } catch (error) {
