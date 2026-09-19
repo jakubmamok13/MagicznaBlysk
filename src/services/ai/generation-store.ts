@@ -37,6 +37,10 @@ export interface GenerationJob {
   rejected: number;
   correctedExcerpts: number;
   failedChunks: number;
+  /** Ile fiszek zwrócił model, zanim walidacja je odsiała. */
+  returned: number;
+  /** Czytelne wyjaśnienie, dlaczego powstało mniej fiszek (albo zero). */
+  outcomeNote: string | null;
 }
 
 export interface StartGenerationInput {
@@ -64,6 +68,8 @@ const IDLE_JOB: GenerationJob = {
   rejected: 0,
   correctedExcerpts: 0,
   failedChunks: 0,
+  returned: 0,
+  outcomeNote: null,
 };
 
 /** Ile ostatnio utworzonych fiszek trzymamy w podglądzie. */
@@ -184,6 +190,8 @@ class GenerationStore {
         rejected: result.rejected,
         correctedExcerpts: result.correctedExcerpts,
         failedChunks: result.failedChunks,
+        returned: result.returned,
+        outcomeNote: describeOutcome(result),
         etaMs: 0,
         message: result.cancelled
           ? 'Przerwano — zapisano dotychczasowe fiszki.'
@@ -214,6 +222,43 @@ class GenerationStore {
 }
 
 export const generationStore = new GenerationStore();
+
+/**
+ * Wyjaśnia, dlaczego powstało mniej fiszek, niż można było oczekiwać.
+ * Najważniejszy przypadek: zero fiszek mimo „zielonego” przebiegu.
+ */
+export function describeOutcome(result: {
+  cardsAdded: number;
+  returned: number;
+  failedChunks: number;
+  chunkCount: number;
+  rejections: { incomplete: number; duplicate: number; ungrounded: number };
+  unverifiedExcerpts: number;
+}): string | null {
+  if (result.cardsAdded === 0) {
+    if (result.returned === 0 && result.failedChunks >= result.chunkCount) {
+      return 'Model nie zwrócił ani jednej fiszki — żaden fragment nie został przetworzony. Spróbuj innego modelu w Ustawieniach.';
+    }
+    if (result.returned === 0) {
+      return 'Model odpowiadał, ale nie utworzył żadnej fiszki. Zwykle pomaga większy model albo mniej fiszek z jednego fragmentu.';
+    }
+    if (result.rejections.duplicate >= result.returned) {
+      return `Wszystkie ${result.returned} fiszek to powtórzenia tych, które już są w talii — materiał jest już przerobiony.`;
+    }
+    return `Model zwrócił ${result.returned} fiszek, ale żadna nie przeszła walidacji (niekompletne: ${result.rejections.incomplete}, powtórzenia: ${result.rejections.duplicate}, bez pokrycia w materiale: ${result.rejections.ungrounded}).`;
+  }
+
+  const notes: string[] = [];
+  if (result.rejections.duplicate > 0) notes.push(`${result.rejections.duplicate} powtórzeń pominięto`);
+  if (result.rejections.incomplete > 0) notes.push(`${result.rejections.incomplete} niekompletnych odrzucono`);
+  if (result.rejections.ungrounded > 0)
+    notes.push(`${result.rejections.ungrounded} bez pokrycia w materiale`);
+  if (result.unverifiedExcerpts > 0)
+    notes.push(`${result.unverifiedExcerpts} cytatów dobrano zastępczo — warto je sprawdzić`);
+  if (result.failedChunks > 0) notes.push(`${result.failedChunks} fragmentów nieudanych`);
+
+  return notes.length > 0 ? notes.join(' · ') : null;
+}
 
 /**
  * Zamienia techniczną awarię silnika na komunikat, z którym da się coś zrobić.

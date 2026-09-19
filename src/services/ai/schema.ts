@@ -1,6 +1,6 @@
 import { CARD_TYPES, type CardType, type DraftCard } from '@/lib/db';
 import { repairClozeSyntax } from '@/lib/cloze';
-import { verifyExcerpt } from '@/lib/text';
+import { bestSourceSentence, normalizeForMatch, verifyExcerpt } from '@/lib/text';
 
 /**
  * Schemat JSON wymuszany na modelu przez WebLLM
@@ -33,6 +33,12 @@ export function buildGenerationSchema(allowedTypes: readonly CardType[]): string
   });
 }
 
+/**
+ * Pokrycie, przy którym zdanie źródłowe uznajemy za prawdopodobny odpowiednik
+ * parafrazy. Niżej wolimy zostawić cytat modelu niż wskazać przypadkowy akapit.
+ */
+const PLAUSIBLE_MATCH_SCORE = 0.3;
+
 /** Surowa, niezweryfikowana fiszka zwrócona przez model. */
 interface RawCard {
   type: string;
@@ -47,13 +53,32 @@ interface RawGenerationPayload {
   cards: RawCard[];
 }
 
+/**
+ * Powody odrzucenia fiszek. Bez tego podziału „dodano 0 fiszek” jest zagadką —
+ * a to najgorszy możliwy wynik generowania.
+ */
+export interface RejectionStats {
+  /** Brak treści awersu lub rewersu. */
+  incomplete: number;
+  /** Ta sama fiszka już istnieje (w tym przebiegu lub w talii). */
+  duplicate: number;
+  /** Nie dało się powiązać fiszki z żadnym zdaniem fragmentu. */
+  ungrounded: number;
+}
+
 export interface ParsedGeneration {
   summary: string;
   cards: DraftCard[];
-  /** Liczba fiszek odrzuconych na etapie walidacji (braki pól, duplikaty). */
+  /** Liczba fiszek odrzuconych na etapie walidacji. */
   rejected: number;
+  /** Rozbicie odrzuceń na przyczyny. */
+  rejections: RejectionStats;
   /** Liczba fiszek, których cytat nie występował dosłownie i został skorygowany. */
   correctedExcerpts: number;
+  /** Cytaty przypisane zastępczo, bo model nie podał trafnego. */
+  unverifiedExcerpts: number;
+  /** Ile fiszek w ogóle zwrócił model przed walidacją. */
+  returned: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -133,35 +158,67 @@ export interface ValidationContext {
 export function parseGenerationResponse(raw: string, context: ValidationContext): ParsedGeneration {
   const payload = toRawPayload(extractJsonObject(raw));
   const cards: DraftCard[] = [];
-  let rejected = 0;
+  const rejections: RejectionStats = { incomplete: 0, duplicate: 0, ungrounded: 0 };
   let correctedExcerpts = 0;
+  let unverifiedExcerpts = 0;
 
   for (const candidate of payload.cards) {
     const card = normalizeCard(candidate, context);
     if (card === null) {
-      rejected += 1;
+      rejections.incomplete += 1;
       continue;
     }
 
     const key = dedupeKey(card.front);
     if (context.seenFronts.has(key)) {
-      rejected += 1;
+      rejections.duplicate += 1;
       continue;
     }
 
     const verification = verifyExcerpt(card.sourceExcerpt, context.source);
+    let excerpt = verification.excerpt;
+
+    let verified = true;
+
     if (!verification.matched) {
-      // Wymóg twardy: bez dosłownego umocowania w źródle fiszka nie wchodzi do talii.
-      rejected += 1;
-      continue;
+      /**
+       * Model sparafrazował cytat. Odrzucenie fiszki kończyło się wynikiem
+       * „dodano 0 fiszek” bez wyjaśnienia, więc ją zachowujemy — ale nie
+       * dopisujemy jej przypadkowego zdania ze źródła (dopasowanie po jednym
+       * pospolitym słowie potrafi wskazać zupełnie inny akapit, co byłoby
+       * fałszywym przypisaniem źródła). Lepiej uczciwie oznaczyć cytat jako
+       * niezweryfikowany.
+       */
+      const fallback = bestSourceSentence(normalizeForMatch(card.sourceExcerpt), context.source);
+
+      if (fallback !== null && fallback.score >= PLAUSIBLE_MATCH_SCORE) {
+        excerpt = fallback.sentence;
+      } else if (card.sourceExcerpt.length > 0) {
+        excerpt = card.sourceExcerpt;
+      } else {
+        rejections.ungrounded += 1;
+        continue;
+      }
+
+      verified = false;
+      unverifiedExcerpts += 1;
+    } else if (!verification.verbatim) {
+      correctedExcerpts += 1;
     }
-    if (!verification.verbatim) correctedExcerpts += 1;
 
     context.seenFronts.add(key);
-    cards.push({ ...card, sourceExcerpt: verification.excerpt });
+    cards.push({ ...card, sourceExcerpt: excerpt, verified });
   }
 
-  return { summary: payload.summary, cards, rejected, correctedExcerpts };
+  return {
+    summary: payload.summary,
+    cards,
+    rejected: rejections.incomplete + rejections.duplicate + rejections.ungrounded,
+    rejections,
+    correctedExcerpts,
+    unverifiedExcerpts,
+    returned: payload.cards.length,
+  };
 }
 
 function normalizeCard(raw: RawCard, context: ValidationContext): DraftCard | null {

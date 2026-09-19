@@ -186,10 +186,16 @@ słabej jakości skanu.
    ograniczony gramatyką schematu, więc odpowiedź nie może być „prawie JSON-em”.
 4. **Walidacja** (`services/ai/schema.ts`) — odrzucenie niekompletnych fiszek, naprawa składni luk
    (`{c1::x}` → `{{c1::x}}`), degradacja `cloze` bez luki do `basic`, deduplikacja awersów.
-5. **Weryfikacja cytatu** (`lib/text.ts`) — cytat musi występować w materiale. Jeśli nie występuje
-   dosłownie, jest podmieniany na najlepiej pokrywające się zdanie źródłowe (porównanie z lekkim
-   stemmingiem, bo polski jest fleksyjny). **Fiszka bez pokrycia w źródle jest odrzucana** —
-   to twarda realizacja wymogu, że każda fiszka ma potwierdzenie w materiale.
+5. **Weryfikacja cytatu** (`lib/text.ts`) — trzystopniowa:
+   - cytat występuje w materiale dosłownie → fiszka oznaczona jako zweryfikowana,
+   - cytat jest parafrazą, ale pokrywa się z konkretnym zdaniem źródła (porównanie z lekkim
+     stemmingiem, bo polski jest fleksyjny) → podmieniamy na to zdanie,
+   - brak trafnego dopasowania → **zostaje sformułowanie modelu, jawnie oznaczone jako
+     niezweryfikowane** (`verified: false`, ostrzeżenie w oknie „Sprawdź źródło”).
+
+   Świadomie nie podpinamy wtedy „najbliższego” zdania na siłę: dopasowanie po jednym pospolitym
+   słowie potrafiło wskazać zupełnie inny akapit, czyli przypisać fiszce fałszywe źródło.
+   Fiszka bez cytatu i bez żadnego zdania w źródle jest odrzucana.
 6. **Zapis** do IndexedDB po każdym fragmencie; przerwanie generowania zachowuje to, co już powstało.
 
 Błąd pojedynczego fragmentu (np. brak pamięci GPU) nie przerywa całości — potok liczy niepowodzenia
@@ -211,6 +217,14 @@ Przebieg jest rozbity na etapy pokazywane użytkownikowi: *uruchamianie modelu �
 analiza materiału → tworzenie fiszek (3/8) → zapis kompendium*. Czas do końca
 liczymy ze średniej z już przetworzonych fragmentów i pokazujemy dopiero wtedy,
 gdy jest z czego go policzyć. Na bieżąco widać też kilka ostatnio utworzonych fiszek.
+
+### Dlaczego powstało mniej fiszek, niż oczekiwano
+
+Wynik „dodano 0 fiszek” przy zielonym przebiegu to najgorsza możliwa informacja zwrotna,
+dlatego potok liczy odrzucenia z podziałem na przyczyny (niekompletne, powtórzenia, brak
+umocowania) i pokazuje je wprost — w oknie generowania i w powiadomieniu. Komunikat rozróżnia
+m.in. sytuacje: model nic nie zwrócił, model odpowiadał ale nie tworzył fiszek, wszystko było
+powtórzeniem już istniejących, walidacja odrzuciła wszystko.
 
 ### Odporność na awarię modelu
 
@@ -463,7 +477,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 100 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 108 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```

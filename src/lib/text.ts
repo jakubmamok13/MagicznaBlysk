@@ -133,14 +133,24 @@ export function verifyExcerpt(excerpt: string, source: string): ExcerptVerificat
     return { excerpt: candidate, verbatim: true, matched: true };
   }
 
-  const best = findBestSentence(normalizedCandidate, source);
-  return best === null
-    ? { excerpt: '', verbatim: false, matched: false }
-    : { excerpt: best, verbatim: false, matched: true };
+  const best = bestSourceSentence(normalizedCandidate, source);
+  return best !== null && best.score >= GOOD_MATCH_SCORE
+    ? { excerpt: best.sentence, verbatim: false, matched: true }
+    : { excerpt: '', verbatim: false, matched: false };
 }
 
-/** Wyszukuje zdanie źródłowe o największym pokryciu słów z cytatem. */
-function findBestSentence(normalizedCandidate: string, source: string): string | null {
+/** Od tego pokrycia uznajemy zdanie źródłowe za odpowiednik cytatu. */
+const GOOD_MATCH_SCORE = 0.35;
+
+/**
+ * Najlepiej pokrywające się zdanie źródła — bez progu.
+ * Używane także jako ostatnia deska ratunku: fiszka powstała z tego fragmentu,
+ * więc lepiej dać jej najbliższe zdanie niż wyrzucić ją bez śladu.
+ */
+export function bestSourceSentence(
+  normalizedCandidate: string,
+  source: string,
+): { sentence: string; score: number } | null {
   const candidateTokens = new Set(tokenize(normalizedCandidate));
   if (candidateTokens.size === 0) return null;
 
@@ -161,8 +171,7 @@ function findBestSentence(normalizedCandidate: string, source: string): string |
     }
   }
 
-  // Poniżej 35% pokrycia uznajemy, że w źródle nie ma odpowiednika.
-  return bestScore >= 0.35 ? bestSentence : null;
+  return bestSentence === null ? null : { sentence: bestSentence, score: bestScore };
 }
 
 /**

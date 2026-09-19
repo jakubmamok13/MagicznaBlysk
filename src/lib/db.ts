@@ -39,6 +39,12 @@ export interface Flashcard {
   back: string;
   /** Dosłowny cytat z materiału źródłowego potwierdzający odpowiedź. */
   sourceExcerpt: string;
+  /**
+   * Czy cytat udało się umocować w materiale. `false` oznacza, że model podał
+   * własne sformułowanie — fiszka jest użyteczna, ale cytat wymaga sprawdzenia.
+   * Starsze rekordy nie mają tego pola i traktujemy je jako zweryfikowane.
+   */
+  verified?: boolean;
   /** Rozszerzone wyjaśnienie „dlaczego”. */
   explanation: string;
   /** Aktualny odstęp powtórki w dniach (SM-2). */
@@ -166,6 +172,8 @@ export interface DraftCard {
   back: string;
   sourceExcerpt: string;
   explanation: string;
+  /** Patrz `Flashcard.verified`. */
+  verified?: boolean;
 }
 
 export function toNewCard(deckId: number, draft: DraftCard): NewRecord<Flashcard> {
@@ -177,6 +185,7 @@ export function toNewCard(deckId: number, draft: DraftCard): NewRecord<Flashcard
     back: draft.back,
     sourceExcerpt: draft.sourceExcerpt,
     explanation: draft.explanation,
+    verified: draft.verified ?? true,
     interval: 0,
     repetitions: 0,
     easeFactor: 2.5,

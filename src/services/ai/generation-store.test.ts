@@ -25,7 +25,8 @@ vi.mock('./generate', async (importOriginal) => ({
     generateFromDocument(options),
 }));
 
-const { generationStore, formatEta, jobPercent, describeEngineCrash } = await import('./generation-store');
+const { generationStore, formatEta, jobPercent, describeEngineCrash, describeOutcome } =
+  await import('./generation-store');
 
 const DOCUMENT: StudyDocument = {
   id: 5,
@@ -52,6 +53,9 @@ function progress(patch: Partial<GenerationProgress>): GenerationProgress {
 const RESULT = {
   cardsAdded: 12,
   fatalError: null,
+  returned: 14,
+  rejections: { incomplete: 0, duplicate: 2, ungrounded: 0 },
+  unverifiedExcerpts: 0,
   rejected: 2,
   correctedExcerpts: 1,
   failedChunks: 0,
@@ -207,6 +211,45 @@ describe('generationStore', () => {
     await generationStore.start(START);
     generationStore.dismiss();
     expect(generationStore.getState().status).toBe('idle');
+  });
+});
+
+describe('describeOutcome', () => {
+  const base = {
+    cardsAdded: 0,
+    returned: 0,
+    failedChunks: 0,
+    chunkCount: 15,
+    rejections: { incomplete: 0, duplicate: 0, ungrounded: 0 },
+    unverifiedExcerpts: 0,
+  };
+
+  it('tłumaczy wynik „zero fiszek”, gdy model nic nie zwrócił', () => {
+    expect(describeOutcome({ ...base, failedChunks: 15 })).toMatch(/ani jednej fiszki/);
+    expect(describeOutcome(base)).toMatch(/nie utworzył żadnej fiszki/);
+  });
+
+  it('tłumaczy zero fiszek, gdy walidacja odrzuciła wszystko', () => {
+    const note = describeOutcome({
+      ...base,
+      returned: 20,
+      rejections: { incomplete: 5, duplicate: 3, ungrounded: 12 },
+    });
+    expect(note).toContain('20');
+    expect(note).toContain('12');
+  });
+
+  it('rozpoznaje materiał już przerobiony', () => {
+    expect(
+      describeOutcome({ ...base, returned: 8, rejections: { incomplete: 0, duplicate: 8, ungrounded: 0 } }),
+    ).toMatch(/powtórzenia/);
+  });
+
+  it('przy udanym przebiegu podsumowuje jakość, a bez uwag milczy', () => {
+    expect(describeOutcome({ ...base, cardsAdded: 10, returned: 10 })).toBeNull();
+    expect(
+      describeOutcome({ ...base, cardsAdded: 10, returned: 12, unverifiedExcerpts: 3 }),
+    ).toMatch(/cytatów dobrano zastępczo/);
   });
 });
 

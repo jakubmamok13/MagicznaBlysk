@@ -1,4 +1,4 @@
-import { Lightbulb, Quote } from 'lucide-react';
+import { AlertTriangle, Lightbulb, Quote } from 'lucide-react';
 
 import {
   Dialog,
@@ -26,7 +26,9 @@ export function SourceModal({ open, onOpenChange, card }: SourceModalProps): Rea
             Źródło odpowiedzi
           </DialogTitle>
           <DialogDescription>
-            Fragment materiału, z którego wprost wynika odpowiedź na tę fiszkę.
+            {card?.verified === false
+              ? 'Cytat podany przez model — nie udało się go potwierdzić w materiale.'
+              : 'Fragment materiału, z którego wprost wynika odpowiedź na tę fiszkę.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -39,6 +41,14 @@ export function SourceModal({ open, onOpenChange, card }: SourceModalProps): Rea
                 ? card.sourceExcerpt
                 : 'Ta fiszka nie ma zapisanego cytatu źródłowego (dodana ręcznie).'}
             </blockquote>
+
+            {card.verified === false && (
+              <p className="flex items-start gap-2 rounded-md bg-warning/10 p-2.5 text-xs text-warning">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                Tego cytatu nie udało się odnaleźć w materiale dosłownie — model podał własne
+                sformułowanie. Zweryfikuj je przed nauką.
+              </p>
+            )}
 
             {card.explanation.length > 0 && (
               <div className="space-y-1.5">

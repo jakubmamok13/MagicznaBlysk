@@ -10,7 +10,12 @@ import { errorMessage } from '@/lib/utils';
 
 import { llmEngine } from './engine';
 import { buildChunkPrompt, SYSTEM_PROMPT } from './prompt';
-import { buildGenerationSchema, dedupeKey, parseGenerationResponse } from './schema';
+import {
+  buildGenerationSchema,
+  dedupeKey,
+  parseGenerationResponse,
+  type RejectionStats,
+} from './schema';
 
 export type GenerationPhase =
   /** Wczytywanie modelu do pamięci GPU. */
@@ -80,6 +85,12 @@ export interface GenerationResult {
   correctedExcerpts: number;
   /** Fragmenty, których model nie przetworzył poprawnie. */
   failedChunks: number;
+  /** Ile fiszek model w ogóle zwrócił przed walidacją. */
+  returned: number;
+  /** Rozbicie odrzuceń na przyczyny — klucz do zrozumienia wyniku „0 fiszek”. */
+  rejections: RejectionStats;
+  /** Cytaty przypisane zastępczo, bo model sparafrazował źródło. */
+  unverifiedExcerpts: number;
   chunkCount: number;
   cancelled: boolean;
   summary: string;
@@ -163,6 +174,9 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   let cancelled = false;
   let consecutiveFailures = 0;
   let fatalError: string | null = null;
+  let returned = 0;
+  let unverifiedExcerpts = 0;
+  const rejections: RejectionStats = { incomplete: 0, duplicate: 0, ungrounded: 0 };
 
   // Czytamy flagę przez funkcję — inaczej analiza przepływu TS „zamraża”
   // wartość `aborted` z pierwszego sprawdzenia w pętli.
@@ -222,6 +236,11 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
         if (parsed.summary.length > 0) summaries.push(parsed.summary.trim());
         rejected += parsed.rejected;
         correctedExcerpts += parsed.correctedExcerpts;
+        unverifiedExcerpts += parsed.unverifiedExcerpts;
+        returned += parsed.returned;
+        rejections.incomplete += parsed.rejections.incomplete;
+        rejections.duplicate += parsed.rejections.duplicate;
+        rejections.ungrounded += parsed.rejections.ungrounded;
 
         /**
          * Zapisujemy po każdym fragmencie, a nie na końcu: fiszki pojawiają się
@@ -308,6 +327,9 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   return {
     cardsAdded,
     fatalError,
+    returned,
+    rejections,
+    unverifiedExcerpts,
     rejected,
     correctedExcerpts,
     failedChunks,

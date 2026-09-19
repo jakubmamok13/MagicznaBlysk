@@ -64,7 +64,78 @@ describe('parseGenerationResponse', () => {
     expect(result.summary).toBe('### Organelle');
   });
 
-  it('odrzuca fiszki bez treści i bez możliwego cytatu', () => {
+  it('parafraza cytatu nie kasuje fiszki — podpina najbliższe zdanie źródła', () => {
+    const raw = JSON.stringify({
+      summary: '',
+      cards: [
+        {
+          type: 'basic',
+          front: 'Gdzie powstaje ATP?',
+          back: 'W mitochondriach',
+          // Model sparafrazował — dawniej taka fiszka znikała bez śladu.
+          sourceExcerpt: 'Energia komórkowa powstaje głównie w mitochondriach',
+          explanation: '',
+        },
+      ],
+    });
+    const result = parseGenerationResponse(raw, context());
+    expect(result.cards).toHaveLength(1);
+    expect(result.unverifiedExcerpts).toBe(1);
+    expect(result.rejections.ungrounded).toBe(0);
+    // Nie zmyślamy źródła: zostaje sformułowanie modelu, jawnie oznaczone.
+    expect(result.cards[0]?.verified).toBe(false);
+    expect(result.cards[0]?.sourceExcerpt).toContain('Energia komórkowa');
+  });
+
+  it('zweryfikowany cytat jest oznaczony jako pewny', () => {
+    const raw = JSON.stringify({
+      summary: '',
+      cards: [
+        {
+          type: 'basic',
+          front: 'Co wytwarzają mitochondria?',
+          back: 'ATP',
+          sourceExcerpt: 'Mitochondria wytwarzają ATP w procesie fosforylacji oksydacyjnej.',
+          explanation: '',
+        },
+      ],
+    });
+    const result = parseGenerationResponse(raw, context());
+    expect(result.cards[0]?.verified).toBe(true);
+    expect(result.unverifiedExcerpts).toBe(0);
+  });
+
+  it('rozbija odrzucenia na przyczyny', () => {
+    const ctx = context();
+    const raw = JSON.stringify({
+      summary: '',
+      cards: [
+        { type: 'basic', front: 'a', back: '', sourceExcerpt: '', explanation: '' },
+        {
+          type: 'basic',
+          front: 'Co wytwarzają mitochondria?',
+          back: 'ATP',
+          sourceExcerpt: 'Mitochondria wytwarzają ATP',
+          explanation: '',
+        },
+        {
+          type: 'basic',
+          front: 'Co wytwarzają mitochondria?',
+          back: 'ATP',
+          sourceExcerpt: 'Mitochondria wytwarzają ATP',
+          explanation: '',
+        },
+      ],
+    });
+    const result = parseGenerationResponse(raw, ctx);
+    expect(result.returned).toBe(3);
+    expect(result.cards).toHaveLength(1);
+    expect(result.rejections.incomplete).toBe(1);
+    expect(result.rejections.duplicate).toBe(1);
+    expect(result.rejected).toBe(2);
+  });
+
+  it('odrzuca niekompletne, a cytat bez pokrycia tylko oznacza', () => {
     const raw = JSON.stringify({
       summary: '',
       cards: [
@@ -79,8 +150,29 @@ describe('parseGenerationResponse', () => {
       ],
     });
     const result = parseGenerationResponse(raw, context());
+
+    expect(result.rejections.incomplete).toBe(1);
+    // Fiszka zostaje, ale jawnie jako niezweryfikowana — zamiast zniknąć bez śladu.
+    expect(result.cards).toHaveLength(1);
+    expect(result.cards[0]?.verified).toBe(false);
+  });
+
+  it('odrzuca fiszkę, gdy nie ma ani cytatu, ani źródła', () => {
+    const raw = JSON.stringify({
+      summary: '',
+      cards: [
+        {
+          type: 'basic',
+          front: 'Pytanie bez żadnego umocowania?',
+          back: 'Odpowiedź',
+          sourceExcerpt: '',
+          explanation: '',
+        },
+      ],
+    });
+    const result = parseGenerationResponse(raw, { ...context(), source: '' });
     expect(result.cards).toHaveLength(0);
-    expect(result.rejected).toBe(2);
+    expect(result.rejections.ungrounded).toBe(1);
   });
 
   it('koryguje cytat do najbliższego zdania źródłowego', () => {

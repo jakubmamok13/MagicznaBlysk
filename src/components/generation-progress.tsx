@@ -111,12 +111,32 @@ export function GenerationProgressPanel({ job }: { job: GenerationJob }): React.
       </div>
 
       <PhaseStepper job={job} />
+
+      {job.outcomeNote !== null && (
+        <p
+          className={cn(
+            'rounded-md p-2.5 text-xs',
+            job.cardsAdded === 0
+              ? 'bg-warning/10 text-warning'
+              : 'bg-muted text-muted-foreground',
+          )}
+        >
+          {job.outcomeNote}
+        </p>
+      )}
+
+      {job.error !== null && (
+        <p className="rounded-md bg-destructive/10 p-2.5 text-xs text-destructive">{job.error}</p>
+      )}
+
       <CardPreview job={job} />
 
-      <p className="text-xs text-muted-foreground">
-        Możesz zamknąć to okno — generowanie działa dalej, a fiszki zapisują się po każdym
-        fragmencie.
-      </p>
+      {job.status === 'running' && (
+        <p className="text-xs text-muted-foreground">
+          Możesz zamknąć to okno — generowanie działa dalej, a fiszki zapisują się po każdym
+          fragmencie.
+        </p>
+      )}
     </div>
   );
 }

@@ -41,16 +41,14 @@ export function AppShell(): React.JSX.Element {
     notifiedStatus.current = generation.status;
 
     if (generation.status === 'done') {
-      const details = [
-        generation.rejected > 0 ? `${generation.rejected} odrzucono w walidacji` : null,
-        generation.correctedExcerpts > 0 ? `${generation.correctedExcerpts} cytatów skorygowano` : null,
-        generation.failedChunks > 0 ? `${generation.failedChunks} fragmentów nieudanych` : null,
-      ].filter((part): part is string => part !== null);
-
       toast({
-        title: `Gotowe — ${generation.cardsAdded} nowych fiszek`,
-        ...(details.length > 0 ? { description: details.join(' · ') } : {}),
-        variant: generation.cardsAdded > 0 ? 'success' : 'info',
+        title:
+          generation.cardsAdded > 0
+            ? `Gotowe — ${generation.cardsAdded} nowych fiszek`
+            : 'Zakończono, ale nie powstała żadna fiszka',
+        ...(generation.outcomeNote !== null ? { description: generation.outcomeNote } : {}),
+        variant: generation.cardsAdded > 0 ? 'success' : 'error',
+        duration: generation.cardsAdded > 0 ? 4500 : 12000,
       });
     } else if (generation.status === 'error') {
       toast({
