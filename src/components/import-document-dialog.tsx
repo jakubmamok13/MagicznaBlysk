@@ -4,6 +4,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   ClipboardCopy,
+  ScanText,
+  Square,
   FileText,
   FileUp,
   Loader2,
@@ -39,6 +41,7 @@ import {
   type ExtractionProgress,
 } from '@/lib/import/extract';
 import { FILE_ACCEPT_ATTRIBUTE, FORMAT_LABELS } from '@/lib/import/formats';
+import { DEFAULT_MAX_OCR_PAGES, ocrPdf, type OcrProgress } from '@/lib/import/ocr';
 import { buildDiagnostics, copyToClipboard } from '@/lib/build-info';
 import { SAMPLE_DOCUMENT_CONTENT, SAMPLE_DOCUMENT_TITLE } from '@/lib/sample';
 import { countWords, readingTimeMinutes } from '@/lib/text';
@@ -71,6 +74,9 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
   const [mergeIntoOne, setMergeIntoOne] = useState(false);
   const [mergedTitle, setMergedTitle] = useState('');
   const [copied, setCopied] = useState(false);
+  // Indeks pliku, na którym trwa OCR, wraz z postępem.
+  const [ocrTarget, setOcrTarget] = useState<{ index: number; progress: OcrProgress } | null>(null);
+  const ocrAbortRef = useRef<AbortController | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const words = countWords(content);
@@ -137,6 +143,59 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
     });
   }, [failures, toast]);
 
+  /** Rozpoznaje tekst na skanie i podmienia treść materiału. */
+  const runOcr = useCallback(
+    async (index: number): Promise<void> => {
+      const target = documents[index];
+      if (target?.source === undefined) return;
+
+      const controller = new AbortController();
+      ocrAbortRef.current = controller;
+      setOcrTarget({
+        index,
+        progress: { page: 0, pageCount: 0, ratio: 0, message: 'Przygotowanie…' },
+      });
+
+      try {
+        const result = await ocrPdf(target.source, {
+          signal: controller.signal,
+          onProgress: (progress) => setOcrTarget({ index, progress }),
+        });
+
+        setDocuments((current) =>
+          current.map((document, i) =>
+            i === index
+              ? {
+                  ...document,
+                  text: result.text,
+                  warnings: [
+                    `Tekst rozpoznany przez OCR z ${pluralize(result.pagesProcessed, 'strony', 'stron', 'stron')} — sprawdź go przed nauką.`,
+                    ...result.warnings,
+                  ],
+                  needsOcr: false,
+                }
+              : document,
+          ),
+        );
+        toast({
+          title: 'Rozpoznano tekst',
+          description: `${pluralize(result.pagesProcessed, 'strona', 'strony', 'stron')} przetworzonych lokalnie.`,
+          variant: 'success',
+        });
+      } catch (error) {
+        toast({
+          title: 'OCR nie powiódł się',
+          description: errorMessage(error),
+          variant: 'error',
+        });
+      } finally {
+        ocrAbortRef.current = null;
+        setOcrTarget(null);
+      }
+    },
+    [documents, toast],
+  );
+
   const removeDocument = useCallback((index: number): void => {
     setDocuments((current) => current.filter((_, i) => i !== index));
   }, []);
@@ -144,6 +203,15 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
   /* -------------------------------- Zapis -------------------------------- */
 
   const saveFiles = useCallback(async (): Promise<void> => {
+    // Materiał bez treści (nierozpoznany skan) nie ma czego uczyć.
+    if (documents.some((document) => document.needsOcr === true)) {
+      toast({
+        title: 'Najpierw rozpoznaj tekst',
+        description: 'Skany bez rozpoznanego tekstu nie mogą trafić do nauki.',
+        variant: 'error',
+      });
+      return;
+    }
     if (documents.length === 0 || saving) return;
     setSaving(true);
 
@@ -290,6 +358,14 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
               </div>
             )}
 
+            {documents.some((document) => document.needsOcr === true) && (
+              <p className="rounded-md bg-accent/60 p-2.5 text-xs text-accent-foreground">
+                Rozpoznawanie tekstu działa lokalnie. Przy pierwszym użyciu pobiera ok. 6 MB
+                silnika i polskiego modelu — potem działa offline. Przetwarzanych jest maksymalnie{' '}
+                {DEFAULT_MAX_OCR_PAGES} stron.
+              </p>
+            )}
+
             {documents.length > 0 && (
               <div className="space-y-2">
                 <div className="max-h-56 space-y-1.5 overflow-y-auto">
@@ -298,7 +374,11 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
                       key={`${document.fileName}-${index}`}
                       className="flex items-start gap-2 rounded-md border p-2.5"
                     >
-                      <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
+                      {document.needsOcr === true ? (
+                        <ScanText className="mt-0.5 size-4 shrink-0 text-warning" />
+                      ) : (
+                        <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" />
+                      )}
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium">{document.fileName}</p>
                         <p className="text-xs text-muted-foreground">
@@ -312,6 +392,38 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
                             {warning}
                           </p>
                         ))}
+
+                        {document.needsOcr === true &&
+                          (ocrTarget?.index === index ? (
+                            <div className="mt-2 space-y-1">
+                              <Progress value={Math.round(ocrTarget.progress.ratio * 100)} />
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="truncate text-xs text-muted-foreground">
+                                  {ocrTarget.progress.message}
+                                </span>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-6 shrink-0 text-xs"
+                                  onClick={() => ocrAbortRef.current?.abort()}
+                                >
+                                  <Square className="size-3" />
+                                  Przerwij
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="mt-2 h-7 text-xs"
+                              disabled={ocrTarget !== null}
+                              onClick={() => void runOcr(index)}
+                            >
+                              <ScanText className="size-3.5" />
+                              Rozpoznaj tekst (OCR)
+                            </Button>
+                          ))}
                       </div>
                       <Button
                         variant="ghost"

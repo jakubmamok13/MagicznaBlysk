@@ -89,6 +89,7 @@ export default defineConfig({
           '**/web-llm-*.js',
           '**/llm.worker-*.js',
           '**/pdf-*.js',
+          '**/tesseract/*.js',
           '**/pdf.worker*.js',
           '**/pdf.worker*.mjs',
         ],
@@ -97,6 +98,17 @@ export default defineConfig({
         navigateFallback: `${base}index.html`,
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
+          {
+            // Rdzeń OCR i dane językowe — pobierane dopiero przy pierwszym OCR,
+            // potem dostępne offline.
+            urlPattern: /\/(tesseract|tessdata)\/[\w.-]+$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'ocr-runtime',
+              expiration: { maxEntries: 8, maxAgeSeconds: 60 * 60 * 24 * 365 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
           {
             // pdf.js i jego workery — cache'owane przy pierwszym imporcie PDF-a.
             urlPattern: /\/assets\/pdf[\w.-]*-[\w-]+\.(js|mjs)$/,

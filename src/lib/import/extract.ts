@@ -1,4 +1,4 @@
-import { installPromiseWithResolvers } from '@/lib/polyfills';
+import { installPolyfills } from '@/lib/polyfills';
 import { errorMessage } from '@/lib/utils';
 
 import {
@@ -151,8 +151,9 @@ async function extractPdf(
   warnings: string[],
   onProgress?: (ratio: number, message: string) => void,
 ): Promise<string> {
-  // Polyfill musi być gotowy przed wczytaniem pdf.js (Safari < 17.4).
-  installPromiseWithResolvers();
+  // Polyfille muszą być gotowe przed wczytaniem pdf.js (Safari: brak
+  // asynchronicznej iteracji po ReadableStream, starsze wersje bez withResolvers).
+  installPolyfills();
 
   // Biblioteka pdf.js waży ~1 MB — ładujemy ją dopiero przy imporcie PDF-a.
   const pdfjs = await import('pdfjs-dist');
@@ -256,9 +257,10 @@ export function describePdfError(message: string): string {
     return 'PDF jest zabezpieczony hasłem — usuń hasło i spróbuj ponownie.';
   }
   if (/is not a function|undefined is not|not supported/i.test(message)) {
+    // Nie zgadujemy już „stara przeglądarka” — to bywało po prostu nieprawdą.
     return (
-      'Ta przeglądarka jest zbyt stara, aby odczytać PDF. Zaktualizuj system ' +
-      '(na iPhonie potrzebny jest iOS 16.4 lub nowszy) albo wczytaj plik na komputerze.'
+      'Odczyt PDF-a napotkał niezgodność tej przeglądarki. Rozwiń „Szczegóły techniczne” ' +
+      'i skopiuj raport — to jedyny sposób, żeby ustalić przyczynę.'
     );
   }
   if (/invalid|corrupt|structure/i.test(message)) {

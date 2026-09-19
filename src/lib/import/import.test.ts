@@ -2,7 +2,10 @@
 import { describe, expect, it } from 'vitest';
 import { detectFormat, titleFromFileName, unsupportedReason } from './formats';
 import { htmlToMarkdown } from './html-to-markdown';
-import { installPromiseWithResolvers } from '@/lib/polyfills';
+import {
+  installPromiseWithResolvers,
+  installReadableStreamAsyncIterator,
+} from '@/lib/polyfills';
 import {
   describePdfError,
   disambiguateTitles,
@@ -116,8 +119,10 @@ describe('mergeDocuments', () => {
 });
 
 describe('describePdfError', () => {
-  it('tłumaczy błąd starej przeglądarki na konkretną wskazówkę', () => {
-    expect(describePdfError("undefined is not a function (near '...i of e...')")).toMatch(/zbyt stara/);
+  it('przy niezgodności prosi o raport zamiast zgadywać przyczynę', () => {
+    expect(describePdfError("undefined is not a function (near '...i of e...')")).toMatch(
+      /Szczegóły techniczne/,
+    );
   });
 
   it('rozpoznaje PDF z hasłem i uszkodzony plik', () => {
@@ -173,6 +178,61 @@ describe('disambiguateTitles', () => {
 describe('normalizeWhitespace', () => {
   it('ujednolica końce linii i usuwa nadmiar pustych wierszy', () => {
     expect(normalizeWhitespace('a\r\n\r\n\r\n\r\nb   \n')).toBe('a\n\nb');
+  });
+});
+
+describe('polyfill ReadableStream[Symbol.asyncIterator]', () => {
+  /** Safari nie wystawia tej metody — pdf.js opiera na niej getTextContent(). */
+  function withoutNativeAsyncIterator(run: () => Promise<void>): Promise<void> {
+    const proto = ReadableStream.prototype as unknown as Record<symbol, unknown>;
+    const original = proto[Symbol.asyncIterator];
+    delete proto[Symbol.asyncIterator];
+    return run().finally(() => {
+      if (original !== undefined) proto[Symbol.asyncIterator] = original;
+    });
+  }
+
+  it('umożliwia `for await` po strumieniu, gdy brak natywnej obsługi', async () => {
+    await withoutNativeAsyncIterator(async () => {
+      installReadableStreamAsyncIterator();
+
+      const stream = new ReadableStream<string>({
+        start(controller) {
+          controller.enqueue('Mitochondria');
+          controller.enqueue('Rybosomy');
+          controller.close();
+        },
+      });
+
+      const chunks: string[] = [];
+      for await (const chunk of stream as unknown as AsyncIterable<string>) chunks.push(chunk);
+      expect(chunks).toEqual(['Mitochondria', 'Rybosomy']);
+    });
+  });
+
+  it('przekazuje dalej błąd strumienia', async () => {
+    await withoutNativeAsyncIterator(async () => {
+      installReadableStreamAsyncIterator();
+
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.error(new Error('awaria strumienia'));
+        },
+      });
+
+      await expect(
+        (async () => {
+          for await (const _chunk of stream as unknown as AsyncIterable<unknown>) void _chunk;
+        })(),
+      ).rejects.toThrow('awaria strumienia');
+    });
+  });
+
+  it('nie nadpisuje natywnej implementacji', () => {
+    const proto = ReadableStream.prototype as unknown as Record<symbol, unknown>;
+    const before = proto[Symbol.asyncIterator];
+    installReadableStreamAsyncIterator();
+    expect(proto[Symbol.asyncIterator]).toBe(before);
   });
 });
 

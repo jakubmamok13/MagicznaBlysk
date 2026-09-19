@@ -5,6 +5,6 @@
  * PRZED biblioteką gwarantuje, że polyfill zdąży zadziałać — także w workerze,
  * gdzie nie da się wywołać funkcji z wątku głównego.
  */
-import { installPromiseWithResolvers } from './polyfills';
+import { installPolyfills } from './polyfills';
 
-installPromiseWithResolvers();
+installPolyfills();

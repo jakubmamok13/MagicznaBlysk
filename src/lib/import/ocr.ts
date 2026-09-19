@@ -1,6 +1,6 @@
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 
-import { installPromiseWithResolvers } from '@/lib/polyfills';
+import { installPolyfills } from '@/lib/polyfills';
 import { errorMessage } from '@/lib/utils';
 
 import { ExtractionError, errorDetails, normalizeWhitespace } from './extract';
@@ -66,7 +66,7 @@ export async function ocrPdf(file: File, options: OcrOptions = {}): Promise<OcrR
   const report = (progress: OcrProgress): void => options.onProgress?.(progress);
   const isAborted = (): boolean => options.signal?.aborted === true;
 
-  installPromiseWithResolvers();
+  installPolyfills();
   report({ page: 0, pageCount: 0, ratio: 0, message: 'Przygotowanie silnika OCR…' });
 
   const [pdfjsLib, tesseract] = await Promise.all([import('pdfjs-dist'), import('tesseract.js')]);
