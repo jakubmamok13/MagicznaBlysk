@@ -277,8 +277,8 @@ class LLMEngineService {
 
   private ensureWorker(): Worker {
     if (this.worker === null) {
+      // Klasyczny worker (format IIFE z konfiguracji Vite) — patrz vite.config.ts.
       this.worker = new Worker(new URL('../../workers/llm.worker.ts', import.meta.url), {
-        type: 'module',
         name: 'cognitivedeck-llm',
       });
     }

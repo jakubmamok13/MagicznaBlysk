@@ -85,12 +85,28 @@ export default defineConfig({
          * precache, żeby pierwsze wejście było lekkie — trafiają do cache przy
          * pierwszym uruchomieniu modelu i od tego momentu działają offline.
          */
-        globIgnores: ['**/web-llm-*.js', '**/llm.worker-*.js'],
+        globIgnores: [
+          '**/web-llm-*.js',
+          '**/llm.worker-*.js',
+          '**/pdf-*.js',
+          '**/pdf.worker*.js',
+          '**/pdf.worker*.mjs',
+        ],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         cleanupOutdatedCaches: true,
         navigateFallback: `${base}index.html`,
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
+          {
+            // pdf.js i jego workery — cache'owane przy pierwszym imporcie PDF-a.
+            urlPattern: /\/assets\/pdf[\w.-]*-[\w-]+\.(js|mjs)$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'pdfjs-runtime',
+              expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 180 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
           {
             // Kod silnika WebLLM — cache'owany dopiero, gdy zostanie użyty.
             urlPattern: /\/assets\/(web-llm|llm\.worker)-[\w-]+\.js$/,
@@ -129,7 +145,14 @@ export default defineConfig({
     },
   },
   worker: {
-    format: 'es',
+    /**
+     * Klasyczne workery zamiast modułowych.
+     * iOS Safari potrafi odmówić wczytania workera typu `module`
+     * („Importing a module script failed”), zwłaszcza gdy żądanie przechodzi
+     * przez Service Workera. Format IIFE wkleja wszystkie zależności do
+     * jednego pliku i działa w każdej przeglądarce z obsługą Web Workers.
+     */
+    format: 'iife',
   },
   server: {
     // `host: true` wystawia serwer w sieci lokalnej (dostęp z telefonu).

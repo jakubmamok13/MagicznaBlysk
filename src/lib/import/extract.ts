@@ -107,14 +107,28 @@ async function extractPdf(
   const pdfjs = await import('pdfjs-dist');
 
   /**
-   * Własny worker zamiast `workerSrc`: nasz wrapper instaluje polyfill również
-   * w zakresie workera, gdzie pdf.js też woła `Promise.withResolvers()`.
+   * Własny worker zamiast samego `workerSrc`: nasz wrapper instaluje polyfill
+   * także w zakresie workera, gdzie pdf.js również woła `Promise.withResolvers()`.
+   *
+   * Dodatkowo ustawiamy `workerSrc`. Gdy utworzenie workera się nie powiedzie
+   * (zdarza się na iOS), pdf.js sam przechodzi na tryb bez workera i parsuje
+   * dokument w wątku głównym — wolniej, ale użytkownik dostaje swój tekst
+   * zamiast komunikatu o błędzie.
    */
-  const worker = new Worker(new URL('../../workers/pdf.worker.ts', import.meta.url), {
-    type: 'module',
-    name: 'cognitivedeck-pdf',
-  });
-  pdfjs.GlobalWorkerOptions.workerPort = worker;
+  pdfjs.GlobalWorkerOptions.workerSrc = (
+    await import('pdfjs-dist/build/pdf.worker.min.mjs?url')
+  ).default;
+
+  let worker: Worker | null = null;
+  try {
+    worker = new Worker(new URL('../../workers/pdf.worker.ts', import.meta.url), {
+      name: 'cognitivedeck-pdf',
+    });
+    pdfjs.GlobalWorkerOptions.workerPort = worker;
+  } catch {
+    // Brak workera nie jest błędem krytycznym — pdf.js użyje wątku głównego.
+    pdfjs.GlobalWorkerOptions.workerPort = null;
+  }
 
   const data = new Uint8Array(await file.arrayBuffer());
 
@@ -149,7 +163,7 @@ async function extractPdf(
   } finally {
     await loadingTask.destroy();
     // Port workera nie jest współdzielony między importami — zwalniamy go.
-    worker.terminate();
+    worker?.terminate();
     pdfjs.GlobalWorkerOptions.workerPort = null;
   }
 
