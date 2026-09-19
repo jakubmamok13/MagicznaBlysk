@@ -72,6 +72,8 @@ export interface GenerationOptions {
 
 export interface GenerationResult {
   cardsAdded: number;
+  /** Ustawione, gdy przebieg przerwała awaria silnika. */
+  fatalError: string | null;
   /** Fiszki odrzucone przez walidację (duplikaty, braki, brak cytatu). */
   rejected: number;
   /** Cytaty skorygowane do dosłownego fragmentu źródła. */
@@ -83,7 +85,31 @@ export interface GenerationResult {
   summary: string;
 }
 
-const MAX_TOKENS_PER_CHUNK = 1800;
+/**
+ * Okno kontekstu modeli to 4096 tokenów, a polszczyzna tokenizuje się gęściej
+ * niż angielski. Trzymamy więc zapas: mniejszy fragment na wejściu i budżet
+ * wyjścia dobrany do liczby zamawianych fiszek. Przekroczenie okna kończyło się
+ * awarią silnika w trakcie „tworzenia fiszek”.
+ */
+const GENERATION_CHUNK_SIZE = 1800;
+
+function outputTokenBudget(cardsPerChunk: number): number {
+  return Math.min(1400, Math.max(600, 400 + 160 * cardsPerChunk));
+}
+
+/** Po tylu błędach pod rząd przerywamy — coś jest nie tak systemowo. */
+const MAX_CONSECUTIVE_FAILURES = 3;
+
+/**
+ * Błędy, po których silnik nie nadaje się do dalszej pracy: utrata urządzenia
+ * GPU, brak pamięci, przepełnienie kontekstu. Dalsze fragmenty i tak poległyby
+ * tak samo, więc przerywamy od razu zamiast mielić kilka minut.
+ */
+export function isFatalEngineError(message: string): boolean {
+  return /device lost|out of memory|\boom\b|context window|exceed|webgpu|adapter|destroyed|detached|aborted\(\)|unreachable/i.test(
+    message,
+  );
+}
 
 /**
  * Główny potok generowania: dzieli materiał na fragmenty, dla każdego prosi
@@ -121,7 +147,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
     etaMs: null,
   });
 
-  const chunks = chunkText(document.rawContent);
+  const chunks = chunkText(document.rawContent, GENERATION_CHUNK_SIZE);
   if (chunks.length === 0) {
     throw new Error('Materiał jest pusty — dodaj treść, z której mają powstać fiszki.');
   }
@@ -135,6 +161,8 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   let correctedExcerpts = 0;
   let failedChunks = 0;
   let cancelled = false;
+  let consecutiveFailures = 0;
+  let fatalError: string | null = null;
 
   // Czytamy flagę przez funkcję — inaczej analiza przepływu TS „zamraża”
   // wartość `aborted` z pierwszego sprawdzenia w pętli.
@@ -181,7 +209,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
             },
           ],
           schema,
-          maxTokens: MAX_TOKENS_PER_CHUNK,
+          maxTokens: outputTokenBudget(cardsPerChunk),
           temperature: 0.3,
         });
 
@@ -202,6 +230,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
          */
         const addedNow = await addCardsToDeck(deckId, parsed.cards);
         cardsAdded += addedNow;
+        consecutiveFailures = 0;
         chunkDurations.push(Date.now() - chunkStartedAt);
 
         report({
@@ -219,10 +248,20 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
           cancelled = true;
           break;
         }
+
+        const message = errorMessage(error);
         failedChunks += 1;
-        console.warn(
-          `[CognitiveDeck] Fragment ${chunkNumber} nie został przetworzony: ${errorMessage(error)}`,
-        );
+        consecutiveFailures += 1;
+        console.warn(`[CognitiveDeck] Fragment ${chunkNumber} nie został przetworzony: ${message}`);
+
+        if (isFatalEngineError(message)) {
+          fatalError = message;
+          break;
+        }
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+          fatalError = `Model zwrócił błąd przy ${consecutiveFailures} fragmentach pod rząd: ${message}`;
+          break;
+        }
       }
     }
   } finally {
@@ -258,8 +297,17 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
     etaMs: 0,
   });
 
+  /**
+   * Po awarii silnika zwalniamy model — kolejna próba wystartuje na czystym
+   * urządzeniu GPU zamiast trafić na to samo, już uszkodzone.
+   */
+  if (fatalError !== null) {
+    await llmEngine.unload().catch(() => undefined);
+  }
+
   return {
     cardsAdded,
+    fatalError,
     rejected,
     correctedExcerpts,
     failedChunks,

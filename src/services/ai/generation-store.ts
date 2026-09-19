@@ -160,6 +160,23 @@ class GenerationStore {
         },
       });
 
+      if (result.fatalError !== null) {
+        // Awaria silnika: fiszki sprzed awarii są już w bazie, mówimy to wprost
+        // i podpowiadamy, co zmienić, zamiast zostawiać suchy komunikat błędu.
+        this.setState({
+          status: 'error',
+          phase: 'cancelled',
+          cardsAdded: result.cardsAdded,
+          rejected: result.rejected,
+          correctedExcerpts: result.correctedExcerpts,
+          failedChunks: result.failedChunks,
+          etaMs: 0,
+          error: describeEngineCrash(result.fatalError, result.cardsAdded),
+          message: `Model przerwał pracę po ${result.cardsAdded} fiszkach.`,
+        });
+        return;
+      }
+
       this.setState({
         status: result.cancelled ? 'cancelled' : 'done',
         phase: result.cancelled ? 'cancelled' : 'done',
@@ -197,6 +214,28 @@ class GenerationStore {
 }
 
 export const generationStore = new GenerationStore();
+
+/**
+ * Zamienia techniczną awarię silnika na komunikat, z którym da się coś zrobić.
+ * Zapisane fiszki zostają — to najważniejsza informacja dla użytkownika.
+ */
+export function describeEngineCrash(reason: string, cardsAdded: number): string {
+  const saved =
+    cardsAdded > 0
+      ? `Fiszki utworzone do tej pory (${cardsAdded}) są zapisane.`
+      : 'Nie zdążyła powstać żadna fiszka.';
+
+  if (/device lost|webgpu|adapter|destroyed/i.test(reason)) {
+    return `Sterownik GPU przerwał pracę modelu. ${saved} Wybierz mniejszy model w Ustawieniach, zamknij inne karty i spróbuj ponownie.`;
+  }
+  if (/out of memory|\boom\b|allocation/i.test(reason)) {
+    return `Zabrakło pamięci GPU. ${saved} Pomaga mniejszy model (0.5B–1B) oraz mniejsza liczba fiszek z jednego fragmentu.`;
+  }
+  if (/context window|exceed/i.test(reason)) {
+    return `Materiał przekroczył okno kontekstu modelu. ${saved} Zmniejsz liczbę fiszek z jednego fragmentu i spróbuj ponownie.`;
+  }
+  return `Model przerwał pracę: ${reason}. ${saved} Spróbuj ponownie z mniejszym modelem.`;
+}
 
 /**
  * Postęp całego zadania w procentach. Etapy przygotowania zajmują 0–10%,

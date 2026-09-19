@@ -5,6 +5,7 @@ import type { GenerationProgress } from './generate';
 const engineState = { status: 'ready' as string };
 const load = vi.fn<() => Promise<void>>();
 const interrupt = vi.fn<() => void>();
+const unload = vi.fn<() => Promise<void>>();
 const generateFromDocument =
   vi.fn<(options: { onProgress?: (p: GenerationProgress) => void; signal?: AbortSignal }) => Promise<unknown>>();
 
@@ -14,6 +15,7 @@ vi.mock('./engine', () => ({
     subscribe: () => () => undefined,
     load: () => load(),
     interrupt: () => interrupt(),
+    unload: () => unload(),
   },
 }));
 
@@ -23,7 +25,7 @@ vi.mock('./generate', async (importOriginal) => ({
     generateFromDocument(options),
 }));
 
-const { generationStore, formatEta, jobPercent } = await import('./generation-store');
+const { generationStore, formatEta, jobPercent, describeEngineCrash } = await import('./generation-store');
 
 const DOCUMENT: StudyDocument = {
   id: 5,
@@ -49,6 +51,7 @@ function progress(patch: Partial<GenerationProgress>): GenerationProgress {
 
 const RESULT = {
   cardsAdded: 12,
+  fatalError: null,
   rejected: 2,
   correctedExcerpts: 1,
   failedChunks: 0,
@@ -71,6 +74,7 @@ describe('generationStore', () => {
     generationStore.dismiss();
     engineState.status = 'ready';
     load.mockResolvedValue();
+    unload.mockResolvedValue();
   });
 
   it('startuje od wczytania modelu i kończy sukcesem', async () => {
@@ -154,6 +158,21 @@ describe('generationStore', () => {
     expect(generationStore.getState().cardsAdded).toBe(3);
   });
 
+  it('awaria silnika daje komunikat z podpowiedzią i liczbą zapisanych fiszek', async () => {
+    generateFromDocument.mockResolvedValue({
+      ...RESULT,
+      cardsAdded: 7,
+      fatalError: 'WebGPU device lost',
+    });
+
+    await generationStore.start(START);
+    const job = generationStore.getState();
+    expect(job.status).toBe('error');
+    expect(job.cardsAdded).toBe(7);
+    expect(job.error).toContain('7');
+    expect(job.error).toMatch(/mniejszy model/i);
+  });
+
   it('błąd zapisuje komunikat zamiast wywracać aplikację', async () => {
     generateFromDocument.mockRejectedValue(new Error('brak pamięci GPU'));
     await generationStore.start(START);
@@ -188,6 +207,19 @@ describe('generationStore', () => {
     await generationStore.start(START);
     generationStore.dismiss();
     expect(generationStore.getState().status).toBe('idle');
+  });
+});
+
+describe('describeEngineCrash', () => {
+  it('rozpoznaje utratę GPU, brak pamięci i przepełnienie kontekstu', () => {
+    expect(describeEngineCrash('WebGPU device lost', 5)).toMatch(/Sterownik GPU/);
+    expect(describeEngineCrash('out of memory', 5)).toMatch(/pamięci GPU/);
+    expect(describeEngineCrash('context window exceeded', 5)).toMatch(/okno kontekstu/);
+  });
+
+  it('zawsze informuje, czy fiszki ocalały', () => {
+    expect(describeEngineCrash('device lost', 12)).toContain('12');
+    expect(describeEngineCrash('device lost', 0)).toMatch(/żadna fiszka/);
   });
 });
 

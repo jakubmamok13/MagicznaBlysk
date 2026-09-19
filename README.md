@@ -212,6 +212,26 @@ analiza materiału → tworzenie fiszek (3/8) → zapis kompendium*. Czas do ko�
 liczymy ze średniej z już przetworzonych fragmentów i pokazujemy dopiero wtedy,
 gdy jest z czego go policzyć. Na bieżąco widać też kilka ostatnio utworzonych fiszek.
 
+### Odporność na awarię modelu
+
+Model uruchomiony lokalnie potrafi paść — najczęściej przez brak pamięci GPU albo
+utratę urządzenia przez sterownik. Potok jest na to przygotowany:
+
+- fragmenty mają 1800 znaków, a budżet tokenów wyjścia dobierany jest do liczby
+  zamawianych fiszek: okno kontekstu modeli to 4096 tokenów, a polszczyzna
+  tokenizuje się gęściej niż angielski,
+- błąd, po którym silnik nie nadaje się do pracy (utrata GPU, brak pamięci,
+  przepełnienie kontekstu), **przerywa przebieg natychmiast** zamiast bezsensownie
+  mielić pozostałe fragmenty martwym silnikiem,
+- trzy błędy pod rząd też przerywają pracę — coś jest wtedy nie tak systemowo,
+- po awarii model jest zwalniany, więc kolejna próba startuje na czystym urządzeniu,
+- komunikat mówi wprost, ile fiszek ocalało i co zmienić (mniejszy model, mniej
+  fiszek z fragmentu).
+
+Ponowne uruchomienie generowania na tym samym materiale jest bezpieczne —
+duplikaty są odrzucane po treści awersu, więc praca sprzed awarii nie ginie
+ani się nie powiela.
+
 Fiszki zapisują się **po każdym fragmencie**, nie zbiorczo na końcu — pojawiają się
 od razu na liście materiału, a przerwanie albo awaria przeglądarki nie kasuje
 dotychczasowej pracy modelu.
@@ -443,7 +463,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 96 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 100 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```

@@ -5,6 +5,7 @@ const addCardsToDeck = vi.fn<(deckId: number, drafts: DraftCard[]) => Promise<nu
 const updateDocumentSummary = vi.fn<(documentId: number, summary: string) => Promise<void>>();
 const generateJson = vi.fn<() => Promise<string>>();
 const interrupt = vi.fn<() => void>();
+const unload = vi.fn<() => Promise<void>>();
 
 vi.mock('@/lib/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/db')>()),
@@ -17,6 +18,7 @@ vi.mock('./engine', () => ({
   llmEngine: {
     generateJson: () => generateJson(),
     interrupt: () => interrupt(),
+    unload: () => unload(),
   },
 }));
 
@@ -48,8 +50,9 @@ function response(summary: string, front: string, excerpt: string): string {
 
 describe('generateFromDocument', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     addCardsToDeck.mockImplementation((_deckId, drafts) => Promise.resolve(drafts.length));
+    unload.mockResolvedValue();
     updateDocumentSummary.mockResolvedValue();
   });
 
@@ -128,25 +131,6 @@ describe('generateFromDocument', () => {
     expect(result.rejected).toBe(1);
   });
 
-  it('kontynuuje mimo błędu jednego fragmentu', async () => {
-    generateJson
-      .mockRejectedValueOnce(new Error('OOM na GPU'))
-      .mockResolvedValueOnce(
-        response('### Rybosomy', 'Za co odpowiadają rybosomy?', 'Rybosomy odpowiadają za syntezę białek'),
-      );
-
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
-
-    expect(result.failedChunks).toBe(1);
-    expect(result.cardsAdded).toBe(1);
-  });
-
   it('przerywa pracę po sygnale abort i zapisuje to, co zdążył zebrać', async () => {
     const controller = new AbortController();
     generateJson.mockImplementation(() => {
@@ -169,6 +153,44 @@ describe('generateFromDocument', () => {
     expect(generateJson).toHaveBeenCalledTimes(1);
     expect(result.cancelled).toBe(true);
     expect(result.cardsAdded).toBe(1);
+  });
+
+  it('awaria silnika przerywa przebieg i zwalnia model', async () => {
+    generateJson.mockRejectedValue(new Error('WebGPU device lost'));
+
+    const result = await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: true,
+    });
+
+    // Drugi fragment nie jest nawet próbowany — silnik i tak by poległ.
+    expect(generateJson).toHaveBeenCalledTimes(1);
+    expect(result.fatalError).toContain('device lost');
+    expect(unload).toHaveBeenCalled();
+  });
+
+  it('zwykły błąd fragmentu nie przerywa całości', async () => {
+    generateJson
+      .mockRejectedValueOnce(new Error('Niepoprawny JSON'))
+      .mockResolvedValueOnce(
+        response('### B', 'Za co odpowiadają rybosomy?', 'Rybosomy odpowiadają za syntezę białek'),
+      );
+
+    const result = await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: true,
+    });
+
+    expect(result.fatalError).toBeNull();
+    expect(result.failedChunks).toBe(1);
+    expect(result.cardsAdded).toBe(1);
+    expect(unload).not.toHaveBeenCalled();
   });
 
   it('nie nadpisuje istniejącego kompendium bez zgody użytkownika', async () => {
