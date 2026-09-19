@@ -42,6 +42,10 @@ jobs:
         run: npm run build:pages
 
       - uses: actions/configure-pages@v5
+        # `enablement: true` włącza Pages w repozytorium przez API (token ma
+        # uprawnienie `pages: write`), więc nie trzeba klikać nic w ustawieniach.
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
