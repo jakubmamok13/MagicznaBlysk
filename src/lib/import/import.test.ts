@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { detectFormat, titleFromFileName, unsupportedReason } from './formats';
 import { htmlToMarkdown } from './html-to-markdown';
 import {
+  installMapUpsert,
   installPromiseWithResolvers,
   installReadableStreamAsyncIterator,
 } from '@/lib/polyfills';
@@ -275,5 +276,56 @@ describe('polyfill Promise.withResolvers', () => {
       if (typeof original === 'function') Reflect.set(Promise, 'withResolvers', original);
       else Reflect.deleteProperty(Promise, 'withResolvers');
     }
+  });
+});
+
+describe('polyfill Map.prototype.getOrInsertComputed', () => {
+  function withoutUpsert(run: () => void): void {
+    const proto = Map.prototype as unknown as Record<string, unknown>;
+    const computed = proto['getOrInsertComputed'];
+    const insert = proto['getOrInsert'];
+    delete proto['getOrInsertComputed'];
+    delete proto['getOrInsert'];
+    try {
+      run();
+    } finally {
+      if (computed !== undefined) proto['getOrInsertComputed'] = computed;
+      if (insert !== undefined) proto['getOrInsert'] = insert;
+    }
+  }
+
+  it('wstawia wartość tylko przy pierwszym wywołaniu', () => {
+    withoutUpsert(() => {
+      installMapUpsert();
+      const map = new Map<string, number>() as Map<string, number> & {
+        getOrInsertComputed: (key: string, fn: (key: string) => number) => number;
+      };
+
+      let calls = 0;
+      const first = map.getOrInsertComputed('a', () => {
+        calls += 1;
+        return 1;
+      });
+      const second = map.getOrInsertComputed('a', () => {
+        calls += 1;
+        return 2;
+      });
+
+      expect(first).toBe(1);
+      expect(second).toBe(1);
+      expect(calls).toBe(1);
+      expect(map.get('a')).toBe(1);
+    });
+  });
+
+  it('getOrInsert zwraca istniejącą wartość zamiast domyślnej', () => {
+    withoutUpsert(() => {
+      installMapUpsert();
+      const map = new Map<string, string>([['k', 'stara']]) as Map<string, string> & {
+        getOrInsert: (key: string, value: string) => string;
+      };
+      expect(map.getOrInsert('k', 'nowa')).toBe('stara');
+      expect(map.getOrInsert('inny', 'nowa')).toBe('nowa');
+    });
   });
 });

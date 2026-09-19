@@ -109,10 +109,52 @@ export function installReadableStreamAsyncIterator(): void {
   };
 }
 
+/* -------------------------------------------------------------------------- */
+/*                 Map.prototype.getOrInsert / getOrInsertComputed            */
+/* -------------------------------------------------------------------------- */
+
+interface UpsertMap<K, V> {
+  has: (key: K) => boolean;
+  get: (key: K) => V | undefined;
+  set: (key: K, value: V) => unknown;
+  getOrInsert?: (key: K, value: V) => V;
+  getOrInsertComputed?: (key: K, callback: (key: K) => V) => V;
+}
+
+/**
+ * `Map.prototype.getOrInsert` i `getOrInsertComputed` to bardzo świeża
+ * propozycja (tzw. upsert). pdf.js 6 już z niej korzysta przy renderowaniu
+ * stron, przez co na większości przeglądarek leci
+ * „getOrInsertComputed is not a function”.
+ */
+export function installMapUpsert(): void {
+  for (const constructor of [Map, WeakMap]) {
+    const prototype = constructor.prototype as unknown as UpsertMap<object, unknown>;
+
+    if (typeof prototype.getOrInsertComputed !== 'function') {
+      prototype.getOrInsertComputed = function getOrInsertComputed(key, callback) {
+        if (this.has(key)) return this.get(key);
+        const value = callback(key);
+        this.set(key, value);
+        return value;
+      };
+    }
+
+    if (typeof prototype.getOrInsert !== 'function') {
+      prototype.getOrInsert = function getOrInsert(key, value) {
+        if (this.has(key)) return this.get(key);
+        this.set(key, value);
+        return value;
+      };
+    }
+  }
+}
+
 /** Instaluje komplet polyfilli wymaganych przez aplikację. */
 export function installPolyfills(): void {
   installPromiseWithResolvers();
   installReadableStreamAsyncIterator();
+  installMapUpsert();
 }
 
 /** Czy przeglądarka miała natywne `Promise.withResolvers` przed polyfillem. */

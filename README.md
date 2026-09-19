@@ -18,6 +18,7 @@ modelu językowego; potem aplikacja działa offline.
 - [Architektura](#architektura)
 - [Model danych](#model-danych)
 - [Import materiałów](#import-materiałów)
+- [OCR skanów](#ocr-skanów)
 - [Potok AI](#potok-ai)
 - [Algorytm SM-2](#algorytm-sm-2)
 - [Tryb offline i PWA](#tryb-offline-i-pwa)
@@ -26,6 +27,7 @@ modelu językowego; potem aplikacja działa offline.
 - [Bez zewnętrznych usług](#bez-zewnętrznych-usług)
 - [Publikacja przez GitHub](#publikacja-przez-github)
 - [Dobór modelu do urządzenia](#dobór-modelu-do-urządzenia)
+- [Zgodność z Safari](#zgodność-z-safari)
 - [Wymagania przeglądarki](#wymagania-przeglądarki)
 - [Testy i jakość kodu](#testy-i-jakość-kodu)
 - [Decyzje projektowe](#decyzje-projektowe)
@@ -153,6 +155,24 @@ Zachowanie:
 
 Parsery (`pdfjs-dist` ~437 kB, worker ~1,3 MB) ładują się dynamicznie — dopiero przy pierwszym
 imporcie PDF-a. Kto wkleja tekst, nigdy ich nie pobiera.
+
+
+## OCR skanów
+
+PDF bez warstwy tekstowej (skan) nie jest odrzucany — w oknie importu pojawia się
+przycisk **Rozpoznaj tekst (OCR)** z postępem i możliwością przerwania.
+
+- silnik: `tesseract.js` z polskim modelem językowym,
+- **wszystko lokalnie**: rdzeń WASM i dane językowe serwujemy z własnej domeny
+  (`scripts/setup-ocr.mjs`), a nie z CDN — skan nie trafia do żadnej usługi,
+- pierwsze użycie pobiera ok. 6 MB (rdzeń + model); potem OCR działa offline,
+- strony renderowane są do bitmapy o szerokości ok. 1600 px — kompromis między
+  jakością rozpoznania a pamięcią na telefonie,
+- limit 30 stron na dokument, błąd pojedynczej strony nie przerywa całości,
+- materiału bez rozpoznanego tekstu nie da się zaimportować do nauki.
+
+Rozpoznany tekst zawsze warto przejrzeć — OCR bywa omylny, zwłaszcza przy
+słabej jakości skanu.
 
 
 ## Potok AI
@@ -400,7 +420,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 68 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 82 testy: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```
@@ -408,6 +428,19 @@ npm run build    # tsc -b + build produkcyjny
 Potok generowania jest testowany ze zaślepionym silnikiem — sprawdzamy podział na fragmenty,
 deduplikację między fragmentami, odporność na błąd fragmentu, przerwanie oraz politykę nadpisywania
 kompendium.
+
+## Zgodność z Safari
+
+Trzy polyfille w `src/lib/polyfills.ts` są tu konieczne, nie ozdobne:
+
+| Brakujące API | Kto tego wymaga | Skutek bez polyfilla |
+| --- | --- | --- |
+| `ReadableStream[Symbol.asyncIterator]` | `pdf.js` w `getTextContent()` | brak odczytu PDF w **każdym** Safari |
+| `Map.prototype.getOrInsertComputed` | `pdf.js` przy renderowaniu stron | brak OCR w większości przeglądarek |
+| `Promise.withResolvers` | `pdf.js` (biblioteka i worker) | brak odczytu PDF w Safari < 17.4 |
+
+Wszystkie instalują się wyłącznie wtedy, gdy natywnej implementacji brakuje, i są
+wykonywane także w zakresie workera (tam polyfill z wątku głównego nie sięga).
 
 ## Decyzje projektowe
 
