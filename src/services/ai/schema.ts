@@ -39,6 +39,39 @@ export function buildGenerationSchema(allowedTypes: readonly CardType[]): string
  */
 const PLAUSIBLE_MATCH_SCORE = 0.3;
 
+/**
+ * Schemat awaryjny: same fiszki, bez kompendium.
+ *
+ * Gramatyka wymusza strukturę, ale nie treść — `{"summary":"…","cards":[]}`
+ * jest w pełni poprawne, więc mniejszy model potrafi pójść na skróty i nie
+ * utworzyć ani jednej fiszki. Przy powtórce zdejmujemy z niego zadanie
+ * pisania kompendium i prosimy wyłącznie o fiszki.
+ */
+export function buildCardsOnlySchema(allowedTypes: readonly CardType[]): string {
+  return JSON.stringify({
+    type: 'object',
+    properties: {
+      cards: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            type: { type: 'string', enum: [...allowedTypes] },
+            front: { type: 'string' },
+            back: { type: 'string' },
+            sourceExcerpt: { type: 'string' },
+            explanation: { type: 'string' },
+          },
+          required: ['type', 'front', 'back', 'sourceExcerpt', 'explanation'],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ['cards'],
+    additionalProperties: false,
+  });
+}
+
 /** Surowa, niezweryfikowana fiszka zwrócona przez model. */
 interface RawCard {
   type: string;

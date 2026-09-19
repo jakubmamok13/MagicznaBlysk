@@ -1,6 +1,7 @@
-import { Check, Loader2, Sparkles, Square, X } from 'lucide-react';
+import { Check, ClipboardCopy, Loader2, Sparkles, Square, X } from 'lucide-react';
 
 import { CardTypeBadge } from '@/components/card-type-badge';
+import { BUILD_ID, BUILD_TIME, copyToClipboard } from '@/lib/build-info';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { maskCloze } from '@/lib/cloze';
@@ -97,6 +98,25 @@ export function CardPreview({ job }: { job: GenerationJob }): React.JSX.Element 
 export function GenerationProgressPanel({ job }: { job: GenerationJob }): React.JSX.Element {
   const percent = jobPercent(job);
   const eta = formatEta(job.etaMs);
+  const finishedEmpty = job.status !== 'running' && job.cardsAdded === 0;
+
+  /** Raport do wklejenia w zgłoszeniu — z surową odpowiedzią modelu. */
+  const copyReport = async (): Promise<void> => {
+    await copyToClipboard(
+      [
+        `CognitiveDeck build ${BUILD_ID} (${BUILD_TIME})`,
+        `Materiał: ${job.documentTitle}`,
+        `Fragmenty: ${job.chunkNumber}/${job.chunkCount} · powtórki: ${job.retriedChunks}`,
+        `Fiszki: dodano ${job.cardsAdded}, model zwrócił ${job.returned}`,
+        `Odrzucone: ${job.rejected} · nieudane fragmenty: ${job.failedChunks}`,
+        `Wynik: ${job.outcomeNote ?? job.message}`,
+        job.error !== null ? `Błąd: ${job.error}` : '',
+        '',
+        'Surowa odpowiedź modelu:',
+        job.debugSample ?? '(brak próbki)',
+      ].join('\n'),
+    );
+  };
 
   return (
     <div className="space-y-3" aria-live="polite">
@@ -127,6 +147,13 @@ export function GenerationProgressPanel({ job }: { job: GenerationJob }): React.
 
       {job.error !== null && (
         <p className="rounded-md bg-destructive/10 p-2.5 text-xs text-destructive">{job.error}</p>
+      )}
+
+      {finishedEmpty && (
+        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void copyReport()}>
+          <ClipboardCopy className="size-3" />
+          Kopiuj raport
+        </Button>
       )}
 
       <CardPreview job={job} />

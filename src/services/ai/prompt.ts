@@ -66,3 +66,27 @@ Zasady bezwzględne:
 - Nie powtarzaj tej samej treści w kilku fiszkach i nie wychodź poza fragment.
 - Odpowiedz wyłącznie obiektem JSON zgodnym ze schematem.`;
 }
+
+/**
+ * Prompt powtórki: krótki, wyłącznie po polsku i bez zadania pisania
+ * kompendium. Mniejsze modele gubią się w długiej, dwujęzycznej instrukcji
+ * i zwracają pustą listę fiszek — tutaj zostawiamy im jedno proste zadanie.
+ */
+export function buildRetryPrompt(input: ChunkPromptInput): string {
+  const types = input.allowedTypes.join(', ');
+
+  return `Tekst:
+"""
+${input.chunk}
+"""
+
+Napisz ${input.targetCards} fiszek do nauki z powyższego tekstu.
+Dozwolone wartości pola "type": ${types}.
+Dla każdej fiszki:
+- "front": pytanie (dla typu cloze: zdanie z luką w składni {{c1::fraza}}),
+- "back": krótka odpowiedź,
+- "sourceExcerpt": fragment powyższego tekstu skopiowany dosłownie,
+- "explanation": jedno zdanie uzasadnienia.
+
+Pisz po polsku. Tablica "cards" nie może być pusta.`;
+}

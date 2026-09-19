@@ -41,6 +41,10 @@ export interface GenerationJob {
   returned: number;
   /** Czytelne wyjaśnienie, dlaczego powstało mniej fiszek (albo zero). */
   outcomeNote: string | null;
+  /** Ile fragmentów wymagało powtórki. */
+  retriedChunks: number;
+  /** Skrócona surowa odpowiedź modelu — do zgłoszenia problemu. */
+  debugSample: string | null;
 }
 
 export interface StartGenerationInput {
@@ -70,6 +74,8 @@ const IDLE_JOB: GenerationJob = {
   failedChunks: 0,
   returned: 0,
   outcomeNote: null,
+  retriedChunks: 0,
+  debugSample: null,
 };
 
 /** Ile ostatnio utworzonych fiszek trzymamy w podglądzie. */
@@ -191,6 +197,8 @@ class GenerationStore {
         correctedExcerpts: result.correctedExcerpts,
         failedChunks: result.failedChunks,
         returned: result.returned,
+        retriedChunks: result.retriedChunks,
+        debugSample: result.debugSample,
         outcomeNote: describeOutcome(result),
         etaMs: 0,
         message: result.cancelled
@@ -234,8 +242,12 @@ export function describeOutcome(result: {
   chunkCount: number;
   rejections: { incomplete: number; duplicate: number; ungrounded: number };
   unverifiedExcerpts: number;
+  retriedChunks?: number;
 }): string | null {
   if (result.cardsAdded === 0) {
+    if ((result.retriedChunks ?? 0) > 0 && result.returned === 0) {
+      return `Model odpowiadał, ale nie utworzył ani jednej fiszki — nawet po uproszczonej powtórce (${result.retriedChunks} prób). To zwykle za mały model: wybierz w Ustawieniach większy (3B) albo zmniejsz liczbę fiszek z fragmentu. Skopiuj raport i prześlij go, jeśli problem wróci.`;
+    }
     if (result.returned === 0 && result.failedChunks >= result.chunkCount) {
       return 'Model nie zwrócił ani jednej fiszki — żaden fragment nie został przetworzony. Spróbuj innego modelu w Ustawieniach.';
     }

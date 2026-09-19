@@ -9,8 +9,9 @@ import { chunkText } from '@/lib/text';
 import { errorMessage } from '@/lib/utils';
 
 import { llmEngine } from './engine';
-import { buildChunkPrompt, SYSTEM_PROMPT } from './prompt';
+import { buildChunkPrompt, buildRetryPrompt, SYSTEM_PROMPT } from './prompt';
 import {
+  buildCardsOnlySchema,
   buildGenerationSchema,
   dedupeKey,
   parseGenerationResponse,
@@ -91,6 +92,13 @@ export interface GenerationResult {
   rejections: RejectionStats;
   /** Cytaty przypisane zastępczo, bo model sparafrazował źródło. */
   unverifiedExcerpts: number;
+  /** Ile fragmentów wymagało powtórki, bo model nie zwrócił żadnej fiszki. */
+  retriedChunks: number;
+  /**
+   * Skrócona surowa odpowiedź modelu z pierwszego fragmentu bez fiszek —
+   * jedyny sposób, by zdiagnozować „zero fiszek” na cudzym urządzeniu.
+   */
+  debugSample: string | null;
   chunkCount: number;
   cancelled: boolean;
   summary: string;
@@ -176,6 +184,9 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   let fatalError: string | null = null;
   let returned = 0;
   let unverifiedExcerpts = 0;
+  let retriedChunks = 0;
+  let debugSample: string | null = null;
+  const cardsOnlySchema = buildCardsOnlySchema(allowedTypes);
   const rejections: RejectionStats = { incomplete: 0, duplicate: 0, ungrounded: 0 };
 
   // Czytamy flagę przez funkcję — inaczej analiza przepływu TS „zamraża”
@@ -227,11 +238,51 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
           temperature: 0.3,
         });
 
-        const parsed = parseGenerationResponse(raw, {
-          source: chunk.content,
-          allowedTypes,
-          seenFronts,
-        });
+        const context = { source: chunk.content, allowedTypes, seenFronts };
+        let parsed = parseGenerationResponse(raw, context);
+
+        /**
+         * Gramatyka wymusza kształt odpowiedzi, ale nie jej treść: pusta lista
+         * `cards` jest formalnie poprawna i mniejsze modele właśnie tak robią.
+         * Wtedy ponawiamy raz, prosząc krótko i wyłącznie o fiszki.
+         */
+        if (parsed.returned === 0 && !isAborted()) {
+          if (debugSample === null) {
+            debugSample = `[fragment ${chunkNumber}, próba 1] ${raw.slice(0, 700)}`;
+          }
+          retriedChunks += 1;
+
+          const retryRaw = await llmEngine.generateJson({
+            messages: [
+              {
+                role: 'system',
+                content:
+                  'Jesteś nauczycielem akademickim. Tworzysz fiszki do nauki na podstawie podanego tekstu. Odpowiadasz wyłącznie obiektem JSON.',
+              },
+              {
+                role: 'user',
+                content: buildRetryPrompt({
+                  documentTitle: document.title,
+                  chunk: chunk.content,
+                  chunkNumber,
+                  chunkCount: chunks.length,
+                  targetCards: cardsPerChunk,
+                  allowedTypes,
+                }),
+              },
+            ],
+            schema: cardsOnlySchema,
+            maxTokens: outputTokenBudget(cardsPerChunk),
+            temperature: 0.5,
+          });
+
+          const retried = parseGenerationResponse(retryRaw, context);
+          if (retried.returned > 0) {
+            parsed = { ...retried, summary: parsed.summary };
+          } else if (!debugSample.includes('próba 2')) {
+            debugSample += ` || [próba 2] ${retryRaw.slice(0, 500)}`;
+          }
+        }
 
         if (parsed.summary.length > 0) summaries.push(parsed.summary.trim());
         rejected += parsed.rejected;
@@ -327,6 +378,8 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   return {
     cardsAdded,
     fatalError,
+    retriedChunks,
+    debugSample,
     returned,
     rejections,
     unverifiedExcerpts,

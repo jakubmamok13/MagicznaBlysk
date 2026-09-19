@@ -115,6 +115,53 @@ describe('generateFromDocument', () => {
     expect(savedAt[0]).toBe(1);
   });
 
+  it('ponawia fragment, gdy model zwróci pustą listę fiszek', async () => {
+    // Gramatyka dopuszcza {"summary":"…","cards":[]} — mniejsze modele tak robią.
+    generateJson
+      .mockResolvedValueOnce(JSON.stringify({ summary: '### A', cards: [] }))
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          cards: [
+            {
+              type: 'basic',
+              front: 'Co wytwarzają mitochondria?',
+              back: 'ATP',
+              sourceExcerpt: 'Mitochondria wytwarzają ATP',
+              explanation: 'Wynika to wprost z tekstu.',
+            },
+          ],
+        }),
+      )
+      .mockResolvedValue(JSON.stringify({ summary: '', cards: [] }));
+
+    const result = await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: true,
+    });
+
+    expect(result.retriedChunks).toBeGreaterThan(0);
+    expect(result.cardsAdded).toBe(1);
+  });
+
+  it('zapisuje próbkę odpowiedzi, gdy model nie tworzy fiszek', async () => {
+    generateJson.mockResolvedValue(JSON.stringify({ summary: 'nic', cards: [] }));
+
+    const result = await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: true,
+    });
+
+    expect(result.cardsAdded).toBe(0);
+    expect(result.debugSample).toContain('cards');
+    expect(result.retriedChunks).toBe(2);
+  });
+
   it('deduplikuje identyczne fiszki z różnych fragmentów', async () => {
     const duplicate = response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP');
     generateJson.mockResolvedValue(duplicate);

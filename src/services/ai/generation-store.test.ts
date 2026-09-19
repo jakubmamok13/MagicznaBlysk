@@ -224,6 +224,12 @@ describe('describeOutcome', () => {
     unverifiedExcerpts: 0,
   };
 
+  it('po nieudanych powtórkach podpowiada większy model', () => {
+    const note = describeOutcome({ ...base, retriedChunks: 15 });
+    expect(note).toMatch(/powtórce/);
+    expect(note).toMatch(/3B|większy/);
+  });
+
   it('tłumaczy wynik „zero fiszek”, gdy model nic nie zwrócił', () => {
     expect(describeOutcome({ ...base, failedChunks: 15 })).toMatch(/ani jednej fiszki/);
     expect(describeOutcome(base)).toMatch(/nie utworzył żadnej fiszki/);

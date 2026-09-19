@@ -218,6 +218,17 @@ analiza materiału → tworzenie fiszek (3/8) → zapis kompendium*. Czas do ko�
 liczymy ze średniej z już przetworzonych fragmentów i pokazujemy dopiero wtedy,
 gdy jest z czego go policzyć. Na bieżąco widać też kilka ostatnio utworzonych fiszek.
 
+### Gdy model zwraca pustą listę
+
+Gramatyka wymuszona przez `response_format` gwarantuje **kształt** odpowiedzi, ale nie jej
+treść: `{"summary":"…","cards":[]}` jest formalnie poprawne. Mniejsze modele potrafią wybrać
+tę drogę na skróty, zwłaszcza przy długiej, dwujęzycznej instrukcji.
+
+Dlatego fragment bez ani jednej fiszki jest **ponawiany raz** z prośbą uproszczoną do minimum:
+schemat bez kompendium (`buildCardsOnlySchema`) i krótki prompt wyłącznie po polsku
+(`buildRetryPrompt`). Jeśli i to nie pomoże, zapisujemy skróconą surową odpowiedź modelu —
+przycisk **Kopiuj raport** w oknie generowania pozwala ją przesłać w zgłoszeniu.
+
 ### Dlaczego powstało mniej fiszek, niż oczekiwano
 
 Wynik „dodano 0 fiszek” przy zielonym przebiegu to najgorsza możliwa informacja zwrotna,
@@ -477,7 +488,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 108 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 111 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```
