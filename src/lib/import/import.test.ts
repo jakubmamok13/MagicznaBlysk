@@ -2,7 +2,9 @@
 import { describe, expect, it } from 'vitest';
 import { detectFormat, titleFromFileName, unsupportedReason } from './formats';
 import { htmlToMarkdown } from './html-to-markdown';
+import { installPromiseWithResolvers } from '@/lib/polyfills';
 import {
+  describePdfError,
   disambiguateTitles,
   joinTextItems,
   mergeDocuments,
@@ -104,6 +106,21 @@ describe('mergeDocuments', () => {
   });
 });
 
+describe('describePdfError', () => {
+  it('tłumaczy błąd starej przeglądarki na konkretną wskazówkę', () => {
+    expect(describePdfError("undefined is not a function (near '...i of e...')")).toMatch(/zbyt stara/);
+  });
+
+  it('rozpoznaje PDF z hasłem i uszkodzony plik', () => {
+    expect(describePdfError('PasswordException: No password given')).toMatch(/hasłem/);
+    expect(describePdfError('InvalidPDFException: Invalid PDF structure')).toMatch(/uszkodzony/);
+  });
+
+  it('pozostałe błędy przekazuje dalej', () => {
+    expect(describePdfError('coś dziwnego')).toContain('coś dziwnego');
+  });
+});
+
 describe('disambiguateTitles', () => {
   const doc = (title: string, format: ExtractedDocument['format']): ExtractedDocument => ({
     fileName: `${title}.x`,
@@ -127,5 +144,47 @@ describe('disambiguateTitles', () => {
 describe('normalizeWhitespace', () => {
   it('ujednolica końce linii i usuwa nadmiar pustych wierszy', () => {
     expect(normalizeWhitespace('a\r\n\r\n\r\n\r\nb   \n')).toBe('a\n\nb');
+  });
+});
+
+describe('polyfill Promise.withResolvers', () => {
+  it('instaluje działającą implementację, gdy brak natywnej', async () => {
+    const original = Reflect.get(Promise, 'withResolvers') as unknown;
+    try {
+      Reflect.deleteProperty(Promise, 'withResolvers');
+      installPromiseWithResolvers();
+
+      const withResolvers = Reflect.get(Promise, 'withResolvers') as <T>() => {
+        promise: Promise<T>;
+        resolve: (value: T) => void;
+        reject: (reason?: unknown) => void;
+      };
+      expect(typeof withResolvers).toBe('function');
+
+      const ok = withResolvers<string>();
+      ok.resolve('gotowe');
+      await expect(ok.promise).resolves.toBe('gotowe');
+
+      const bad = withResolvers<string>();
+      bad.reject(new Error('błąd'));
+      await expect(bad.promise).rejects.toThrow('błąd');
+    } finally {
+      if (typeof original === 'function') {
+        Reflect.set(Promise, 'withResolvers', original);
+      }
+    }
+  });
+
+  it('nie nadpisuje natywnej implementacji', () => {
+    const marker = (): unknown => 'natywna';
+    const original = Reflect.get(Promise, 'withResolvers') as unknown;
+    try {
+      Reflect.set(Promise, 'withResolvers', marker);
+      installPromiseWithResolvers();
+      expect(Reflect.get(Promise, 'withResolvers')).toBe(marker);
+    } finally {
+      if (typeof original === 'function') Reflect.set(Promise, 'withResolvers', original);
+      else Reflect.deleteProperty(Promise, 'withResolvers');
+    }
   });
 });

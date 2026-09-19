@@ -1,3 +1,4 @@
+import { installPromiseWithResolvers } from '@/lib/polyfills';
 import { errorMessage } from '@/lib/utils';
 
 import {
@@ -99,10 +100,21 @@ async function extractPdf(
   warnings: string[],
   onProgress?: (ratio: number, message: string) => void,
 ): Promise<string> {
+  // Polyfill musi być gotowy przed wczytaniem pdf.js (Safari < 17.4).
+  installPromiseWithResolvers();
+
   // Biblioteka pdf.js waży ~1 MB — ładujemy ją dopiero przy imporcie PDF-a.
   const pdfjs = await import('pdfjs-dist');
-  const workerSrc = (await import('pdfjs-dist/build/pdf.worker.min.mjs?url')).default;
-  pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
+
+  /**
+   * Własny worker zamiast `workerSrc`: nasz wrapper instaluje polyfill również
+   * w zakresie workera, gdzie pdf.js też woła `Promise.withResolvers()`.
+   */
+  const worker = new Worker(new URL('../../workers/pdf.worker.ts', import.meta.url), {
+    type: 'module',
+    name: 'cognitivedeck-pdf',
+  });
+  pdfjs.GlobalWorkerOptions.workerPort = worker;
 
   const data = new Uint8Array(await file.arrayBuffer());
 
@@ -136,6 +148,9 @@ async function extractPdf(
     }
   } finally {
     await loadingTask.destroy();
+    // Port workera nie jest współdzielony między importami — zwalniamy go.
+    worker.terminate();
+    pdfjs.GlobalWorkerOptions.workerPort = null;
   }
 
   if (emptyPages > 0) {
@@ -147,6 +162,26 @@ async function extractPdf(
   }
 
   return pages.join('\n\n');
+}
+
+/**
+ * Zamienia surowy błąd pdf.js na komunikat, z którym użytkownik coś zrobi.
+ * „undefined is not a function” oznacza w praktyce zbyt starą przeglądarkę.
+ */
+export function describePdfError(message: string): string {
+  if (/password/i.test(message)) {
+    return 'PDF jest zabezpieczony hasłem — usuń hasło i spróbuj ponownie.';
+  }
+  if (/is not a function|undefined is not|not supported/i.test(message)) {
+    return (
+      'Ta przeglądarka jest zbyt stara, aby odczytać PDF. Zaktualizuj system ' +
+      '(na iPhonie potrzebny jest iOS 16.4 lub nowszy) albo wczytaj plik na komputerze.'
+    );
+  }
+  if (/invalid|corrupt|structure/i.test(message)) {
+    return 'Plik PDF jest uszkodzony lub ma nietypową strukturę — spróbuj zapisać go ponownie.';
+  }
+  return `Nie udało się otworzyć PDF-a: ${message}`;
 }
 
 /** Element tekstowy pdf.js — interesują nas tylko te pola. */
