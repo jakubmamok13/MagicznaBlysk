@@ -22,6 +22,7 @@ modelu językowego; potem aplikacja działa offline.
 - [Tryb offline i PWA](#tryb-offline-i-pwa)
 - [Instalacja na telefonie](#instalacja-na-telefonie)
 - [Wdrożenie](#wdrożenie)
+- [Bez zewnętrznych usług](#bez-zewnętrznych-usług)
 - [Wymagania przeglądarki](#wymagania-przeglądarki)
 - [Testy i jakość kodu](#testy-i-jakość-kodu)
 - [Decyzje projektowe](#decyzje-projektowe)
@@ -86,6 +87,8 @@ Przy pierwszym uruchomieniu kliknij **„Pobierz i uruchom model”** w panelu �
 | `npm run test` | testy jednostkowe (Vitest) |
 | `npm run lint` | ESLint z regułami typowanymi |
 | `npm run icons` | ponowne wygenerowanie ikon PWA (`scripts/generate-icons.mjs`) |
+| `npm run cert` | certyfikat lokalny do HTTPS w sieci domowej (`scripts/generate-cert.mjs`) |
+| `npm run build:pages` | build z `404.html` jako fallbackiem dla GitHub Pages |
 
 ## Architektura
 
@@ -241,6 +244,55 @@ użytkownicy nie dostaliby aktualizacji aplikacji.
 
 > Hosting serwuje wyłącznie pliki statyczne. Materiały, fiszki i model nadal nie opuszczają
 > urządzenia użytkownika — serwer nigdy ich nie widzi.
+
+## Bez zewnętrznych usług
+
+Aplikacja nie potrzebuje hostingu — wystarczy serwer statyczny na własnym komputerze.
+Kluczowa obserwacja: **`localhost` jest bezpiecznym kontekstem**, więc Service Worker
+(instalacja PWA, tryb offline) i WebGPU (model AI) działają tam bez żadnego certyfikatu.
+
+### Na własnym komputerze
+
+```bash
+npm run build
+npm run preview        # https/http://localhost:4173
+```
+
+To pełnoprawne uruchomienie: aplikację można zainstalować (Chrome: ikona instalacji w pasku
+adresu), działa offline i generuje fiszki lokalnym modelem. Nie jest potrzebne nic poza
+zależnościami projektu.
+
+### Na telefonie w tej samej sieci Wi-Fi
+
+Adres w sieci lokalnej (`http://192.168.x.x`) **nie** jest bezpiecznym kontekstem, więc telefon
+nie zainstaluje PWA ani nie udostępni WebGPU. Rozwiązanie bez instalowania czegokolwiek —
+certyfikat samopodpisany generowany przez `openssl` (obecny w macOS i Linuksie, w Windows
+dostępny w Git Bash):
+
+```bash
+npm run cert           # wypisze adresy do otwarcia na telefonie
+npm run build
+npm run preview        # nasłuchuje też w sieci lokalnej
+```
+
+Na telefonie otwórz `https://<adres-komputera>:4173`. Przeglądarka ostrzeże o certyfikacie:
+
+- **Android / Chrome** — *Zaawansowane* → *Przejdź do witryny*,
+- **iOS / Safari** — *Szczegóły* → *Odwiedź tę stronę*; aby zadziałała instalacja PWA, trzeba
+  dodatkowo zaufać certyfikatowi w *Ustawienia → Ogólne → Informacje → Zaufanie certyfikatom*.
+
+Katalog `certs/` jest w `.gitignore` — certyfikat nigdy nie trafia do repozytorium.
+Konfiguracja Vite wykrywa go automatycznie; bez certyfikatu wszystko działa jak dotąd po HTTP.
+
+### Ograniczenia tego wariantu
+
+- komputer musi być włączony i w tej samej sieci co telefon,
+- adres jest prywatny — nie da się go otworzyć spoza sieci domowej,
+- po instalacji PWA aplikacja działa offline, ale **pierwsze** wejście wymaga dostępu
+  do serwera, a pierwsze pobranie wag modelu — dostępu do internetu.
+
+Jeśli potrzebujesz adresu publicznego, użyj hostingu statycznego z sekcji
+[Wdrożenie](#wdrożenie) — plik `dist/` można też po prostu przeciągnąć na stronę dostawcy.
 
 ## Wymagania przeglądarki
 

@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -8,6 +9,21 @@ import { VitePWA } from 'vite-plugin-pwa';
  * w Cache API, dlatego Workbox nie powinien ich przechwytywać. Cache'ujemy
  * natomiast biblioteki WASM oraz całą powłokę aplikacji (App Shell).
  */
+/**
+ * Certyfikat lokalny z `npm run cert` (katalog ./certs, poza repozytorium).
+ * Gdy istnieje, serwer dev i podgląd chodzą po HTTPS — dzięki temu aplikację
+ * można zainstalować jako PWA i użyć WebGPU także z telefonu w tej samej sieci.
+ * Bez certyfikatu wszystko działa jak dotąd, po HTTP na localhoście.
+ */
+function localHttps(): { key: Buffer; cert: Buffer } | undefined {
+  const key = fileURLToPath(new URL('./certs/key.pem', import.meta.url));
+  const cert = fileURLToPath(new URL('./certs/cert.pem', import.meta.url));
+  if (!existsSync(key) || !existsSync(cert)) return undefined;
+  return { key: readFileSync(key), cert: readFileSync(cert) };
+}
+
+const https = localHttps();
+
 export default defineConfig({
   plugins: [
     react(),
@@ -97,6 +113,16 @@ export default defineConfig({
   },
   worker: {
     format: 'es',
+  },
+  server: {
+    // `host: true` wystawia serwer w sieci lokalnej (dostęp z telefonu).
+    host: true,
+    ...(https ? { https } : {}),
+  },
+  preview: {
+    host: true,
+    port: 4173,
+    ...(https ? { https } : {}),
   },
   build: {
     target: 'es2022',
