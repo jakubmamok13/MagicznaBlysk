@@ -18,6 +18,13 @@ export interface ExtractedDocument {
   text: string;
   /** Uwagi nieblokujące, np. PDF bez warstwy tekstowej na części stron. */
   warnings: string[];
+  /**
+   * PDF bez warstwy tekstowej (skan). Tekst jest pusty, dopóki użytkownik
+   * nie uruchomi OCR — dlatego trzymamy też oryginalny plik.
+   */
+  needsOcr?: boolean;
+  /** Oryginalny plik — potrzebny do rozpoznawania tekstu. */
+  source?: File;
 }
 
 export interface ExtractionFailure {
@@ -103,12 +110,26 @@ export async function extractFromFile(
   }
 
   const cleaned = normalizeWhitespace(text);
+
+  /**
+   * Pusty PDF to niemal zawsze skan. Zamiast odrzucać plik, oznaczamy go jako
+   * wymagający OCR — użytkownik decyduje, czy uruchomić rozpoznawanie tekstu.
+   */
+  if (cleaned.length === 0 && format === 'pdf') {
+    onProgress?.(1, 'Skan bez warstwy tekstowej');
+    return {
+      fileName: file.name,
+      title: titleFromFileName(file.name),
+      format,
+      text: '',
+      warnings: ['Ten PDF nie zawiera warstwy tekstowej — to skan. Uruchom OCR, aby odczytać treść.'],
+      needsOcr: true,
+      source: file,
+    };
+  }
+
   if (cleaned.length === 0) {
-    throw new Error(
-      format === 'pdf'
-        ? 'Ten PDF nie zawiera warstwy tekstowej (to prawdopodobnie skan). Potrzebne jest OCR.'
-        : 'Plik nie zawiera tekstu.',
-    );
+    throw new Error('Plik nie zawiera tekstu.');
   }
 
   onProgress?.(1, 'Gotowe');
@@ -216,11 +237,10 @@ async function extractPdf(
     );
   }
 
-  if (emptyPages > 0) {
+  // Gdy pusty jest cały dokument, komunikat o skanie doda `extractFromFile`.
+  if (emptyPages > 0 && emptyPages < pdf.numPages) {
     warnings.push(
-      emptyPages === pdf.numPages
-        ? 'Żadna strona nie zawiera tekstu — to skan, potrzebne jest OCR.'
-        : `${emptyPages} z ${pdf.numPages} stron nie zawiera tekstu (prawdopodobnie skany lub grafiki).`,
+      `${emptyPages} z ${pdf.numPages} stron nie zawiera tekstu (prawdopodobnie skany lub grafiki).`,
     );
   }
 

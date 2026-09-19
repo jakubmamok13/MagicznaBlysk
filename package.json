@@ -5,7 +5,9 @@
   "type": "module",
   "description": "CognitiveDeck - lokalny asystent nauki z fiszkami SRS i AI działającym w przeglądarce (WebGPU).",
   "scripts": {
+    "predev": "node scripts/setup-ocr.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/setup-ocr.mjs",
     "build": "tsc -b && vite build",
     "build:pages": "npm run build && node -e \"require('node:fs').copyFileSync('dist/index.html','dist/404.html')\"",
     "preview": "vite preview",
@@ -14,7 +16,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "icons": "node scripts/generate-icons.mjs",
-    "cert": "node scripts/generate-cert.mjs"
+    "cert": "node scripts/generate-cert.mjs",
+    "ocr:setup": "node scripts/setup-ocr.mjs"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.79",
@@ -38,7 +41,8 @@
     "react-router-dom": "^6.29.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.0.1",
-    "tailwindcss-animate": "^1.0.7"
+    "tailwindcss-animate": "^1.0.7",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",
