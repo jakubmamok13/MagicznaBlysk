@@ -24,7 +24,24 @@ function localHttps(): { key: Buffer; cert: Buffer } | undefined {
 
 const https = localHttps();
 
+/**
+ * Ścieżka bazowa aplikacji. GitHub Pages dla repozytorium projektu serwuje
+ * stronę pod `/<nazwa-repo>/`, więc wszystkie odwołania (zasoby, manifest,
+ * zakres Service Workera, routing) muszą ten przedrostek uwzględniać.
+ * Domyślnie `/` — dla hostingu w katalogu głównym i pracy lokalnej.
+ *
+ * Użycie: BASE_PATH=/MagicznaBlysk/ npm run build
+ */
+const base = normalizeBase(process.env['BASE_PATH']);
+
+function normalizeBase(value: string | undefined): string {
+  if (value === undefined || value.trim().length === 0 || value === '/') return '/';
+  const withLeading = value.startsWith('/') ? value : `/${value}`;
+  return withLeading.endsWith('/') ? withLeading : `${withLeading}/`;
+}
+
 export default defineConfig({
+  base,
   plugins: [
     react(),
     VitePWA({
@@ -32,7 +49,7 @@ export default defineConfig({
       injectRegister: null,
       includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'robots.txt'],
       manifest: {
-        id: '/',
+        id: base,
         name: 'CognitiveDeck — nauka z lokalną AI',
         short_name: 'CognitiveDeck',
         description:
@@ -43,8 +60,8 @@ export default defineConfig({
         background_color: '#0f172a',
         display: 'standalone',
         orientation: 'portrait-primary',
-        start_url: '/',
-        scope: '/',
+        start_url: base,
+        scope: base,
         categories: ['education', 'productivity'],
         icons: [
           { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
@@ -57,8 +74,8 @@ export default defineConfig({
           },
         ],
         shortcuts: [
-          { name: 'Panel', short_name: 'Panel', url: '/dashboard' },
-          { name: 'Ustawienia', short_name: 'Ustawienia', url: '/settings' },
+          { name: 'Panel', short_name: 'Panel', url: `${base}dashboard` },
+          { name: 'Ustawienia', short_name: 'Ustawienia', url: `${base}settings` },
         ],
       },
       workbox: {
@@ -71,7 +88,7 @@ export default defineConfig({
         globIgnores: ['**/web-llm-*.js', '**/llm.worker-*.js'],
         maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
         cleanupOutdatedCaches: true,
-        navigateFallback: 'index.html',
+        navigateFallback: `${base}index.html`,
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {

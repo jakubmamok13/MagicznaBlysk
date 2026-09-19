@@ -23,6 +23,7 @@ modelu językowego; potem aplikacja działa offline.
 - [Instalacja na telefonie](#instalacja-na-telefonie)
 - [Wdrożenie](#wdrożenie)
 - [Bez zewnętrznych usług](#bez-zewnętrznych-usług)
+- [Publikacja przez GitHub](#publikacja-przez-github)
 - [Wymagania przeglądarki](#wymagania-przeglądarki)
 - [Testy i jakość kodu](#testy-i-jakość-kodu)
 - [Decyzje projektowe](#decyzje-projektowe)
@@ -293,6 +294,52 @@ Konfiguracja Vite wykrywa go automatycznie; bez certyfikatu wszystko działa jak
 
 Jeśli potrzebujesz adresu publicznego, użyj hostingu statycznego z sekcji
 [Wdrożenie](#wdrożenie) — plik `dist/` można też po prostu przeciągnąć na stronę dostawcy.
+
+## Publikacja przez GitHub
+
+GitHub serwuje wyłącznie pliki statyczne — i dokładnie tego ta aplikacja potrzebuje, bo nie ma
+backendu. Model językowy nadal działa na urządzeniu osoby, która otworzy stronę, a wagi pobierają
+się z Hugging Face, więc hosting nie przenosi gigabajtów.
+
+### GitHub Pages (automatycznie, przy każdym pushu)
+
+W repozytorium jest gotowy workflow `.github/workflows/deploy.yml`:
+
+1. wypchnij kod na `main`,
+2. w repozytorium: **Settings → Pages → Source: GitHub Actions**,
+3. każdy push uruchamia lint, testy i build, a następnie publikuje stronę.
+
+Adres zależy od nazwy repozytorium:
+
+| Repozytorium | Adres | `BASE_PATH` |
+| --- | --- | --- |
+| `<użytkownik>/MagicznaBlysk` | `https://<użytkownik>.github.io/MagicznaBlysk/` | `/MagicznaBlysk/` (ustawia workflow) |
+| `<użytkownik>/<użytkownik>.github.io` | `https://<użytkownik>.github.io/` | `/` — zmień `BASE_PATH` w workflow |
+
+Strona projektu działa w podkatalogu, dlatego build musi znać ścieżkę bazową — inaczej wszystkie
+zasoby, manifest i zakres Service Workera wskazywałyby katalog główny i dawały 404. Workflow
+podstawia nazwę repozytorium automatycznie; lokalnie:
+
+```bash
+BASE_PATH=/MagicznaBlysk/ npm run build:pages
+```
+
+`build:pages` dokłada `dist/404.html` (kopię `index.html`) — GitHub Pages używa go jako fallbacku
+dla routingu po stronie klienta, dzięki czemu wejście wprost na `/study/3` otwiera aplikację.
+
+Pages daje HTTPS, więc PWA instaluje się na telefonie, a WebGPU jest dostępne — to najprostszy
+sposób, by mieć aplikację na telefonie bez trzymania włączonego komputera.
+
+### GitHub Codespaces (uruchomienie bez konfiguracji lokalnej)
+
+Jeśli chcesz tylko uruchomić aplikację, bez publikowania:
+
+1. **Code → Codespaces → Create codespace**,
+2. w terminalu: `npm install && npm run dev`,
+3. otwórz przekierowany adres (Codespaces nadaje mu HTTPS).
+
+Model i tak liczy się w Twojej przeglądarce, na Twoim GPU — Codespace tylko serwuje pliki.
+Przekierowany port ustaw jako **Public**, jeśli chcesz otworzyć adres na telefonie.
 
 ## Wymagania przeglądarki
 

@@ -1,0 +1,58 @@
+name: Build i publikacja na GitHub Pages
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+# Uprawnienia wymagane przez akcje publikujące Pages.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Publikujemy pojedynczo; trwającego wdrożenia nie przerywamy.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Kontrola jakości
+        run: |
+          npm run lint
+          npm run test
+
+      - name: Build
+        # Strona projektu działa pod /<nazwa-repo>/ — inaczej zasoby dają 404.
+        # Dla repozytorium <użytkownik>.github.io ustaw BASE_PATH na "/".
+        env:
+          BASE_PATH: /${{ github.event.repository.name }}/
+        run: npm run build:pages
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

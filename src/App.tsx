@@ -32,7 +32,8 @@ export function App(): React.JSX.Element {
   return (
     <ErrorBoundary>
       <ToastProvider>
-        <BrowserRouter>
+        {/* `BASE_URL` pozwala serwować aplikację z podkatalogu (GitHub Pages). */}
+        <BrowserRouter basename={import.meta.env.BASE_URL}>
           <Routes>
             <Route element={<AppShell />}>
               <Route index element={<Navigate to="/dashboard" replace />} />
