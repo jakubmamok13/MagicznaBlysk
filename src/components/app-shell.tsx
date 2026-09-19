@@ -1,13 +1,17 @@
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useEffect, useRef } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { BrainCircuit, LayoutDashboard, Settings, WifiOff } from 'lucide-react';
 
 import { EngineStatusBadge } from '@/components/engine-panel';
+import { GenerationStrip } from '@/components/generation-progress';
 import { PwaUpdatePrompt } from '@/components/pwa-update';
 import { Badge } from '@/components/ui/badge';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { useEngine } from '@/hooks/use-engine';
+import { useGeneration } from '@/hooks/use-generation';
 import { useOnlineStatus } from '@/hooks/use-online-status';
+import { useToast } from '@/components/ui/toast';
 import { countDueCards } from '@/lib/db';
 import { cn } from '@/lib/utils';
 
@@ -22,15 +26,51 @@ const NAV_ITEMS = [
  */
 export function AppShell(): React.JSX.Element {
   const engine = useEngine();
+  const generation = useGeneration();
   const online = useOnlineStatus();
+  const navigate = useNavigate();
   const location = useLocation();
   const dueToday = useLiveQuery(() => countDueCards(), [], 0);
   const isStudyMode = location.pathname.startsWith('/study/');
+  const { toast } = useToast();
+
+  /** Jedno powiadomienie po zakończeniu generowania, gdziekolwiek jest użytkownik. */
+  const notifiedStatus = useRef<string>('idle');
+  useEffect(() => {
+    if (generation.status === notifiedStatus.current) return;
+    notifiedStatus.current = generation.status;
+
+    if (generation.status === 'done') {
+      const details = [
+        generation.rejected > 0 ? `${generation.rejected} odrzucono w walidacji` : null,
+        generation.correctedExcerpts > 0 ? `${generation.correctedExcerpts} cytatów skorygowano` : null,
+        generation.failedChunks > 0 ? `${generation.failedChunks} fragmentów nieudanych` : null,
+      ].filter((part): part is string => part !== null);
+
+      toast({
+        title: `Gotowe — ${generation.cardsAdded} nowych fiszek`,
+        ...(details.length > 0 ? { description: details.join(' · ') } : {}),
+        variant: generation.cardsAdded > 0 ? 'success' : 'info',
+      });
+    } else if (generation.status === 'error') {
+      toast({
+        title: 'Generowanie nie powiodło się',
+        description: generation.error ?? undefined,
+        variant: 'error',
+      });
+    }
+  }, [generation, toast]);
 
   return (
     <TooltipProvider delayDuration={200}>
       <div className="flex min-h-dvh flex-col bg-background">
         <PwaUpdatePrompt />
+
+        {/* Postęp generowania widoczny niezależnie od otwartego widoku. */}
+        <GenerationStrip
+          job={generation}
+          onOpen={() => navigate(`/documents/${generation.documentId}`)}
+        />
 
         {!isStudyMode && (
           <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">

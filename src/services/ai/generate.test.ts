@@ -76,9 +76,11 @@ describe('generateFromDocument', () => {
     expect(result.failedChunks).toBe(0);
     expect(result.cancelled).toBe(false);
 
+    // Zapis jest inkrementalny: jedno wywołanie na fragment, nie jedno zbiorcze.
+    expect(addCardsToDeck).toHaveBeenCalledTimes(2);
     const [deckId, drafts] = addCardsToDeck.mock.calls[0] ?? [];
     expect(deckId).toBe(3);
-    expect(drafts).toHaveLength(2);
+    expect(drafts).toHaveLength(1);
 
     expect(updateDocumentSummary).toHaveBeenCalledWith(
       7,
@@ -86,6 +88,28 @@ describe('generateFromDocument', () => {
     );
     expect(result.summary).toContain('### Mitochondria');
     expect(result.summary).toContain('### Rybosomy');
+  });
+
+  it('zapisuje fiszki po każdym fragmencie, nie dopiero na końcu', async () => {
+    const savedAt: number[] = [];
+    addCardsToDeck.mockImplementation((_deckId, drafts) => {
+      savedAt.push(generateJson.mock.calls.length);
+      return Promise.resolve(drafts.length);
+    });
+    generateJson.mockResolvedValue(
+      response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
+    );
+
+    await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: false,
+    });
+
+    // Pierwszy zapis następuje po pierwszym zapytaniu do modelu, nie po ostatnim.
+    expect(savedAt[0]).toBe(1);
   });
 
   it('deduplikuje identyczne fiszki z różnych fragmentów', async () => {

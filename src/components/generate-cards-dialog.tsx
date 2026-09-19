@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from 'react';
-import { Loader2, Sparkles, Square, Wand2 } from 'lucide-react';
+import { useCallback, useState } from 'react';
+import { Download, Sparkles, Square, Wand2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -11,7 +11,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { Progress } from '@/components/ui/progress';
 import {
   Select,
   SelectContent,
@@ -20,12 +19,14 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { useToast } from '@/components/ui/toast';
+import { GenerationProgressPanel } from '@/components/generation-progress';
 import { useEngine } from '@/hooks/use-engine';
+import { useGeneration } from '@/hooks/use-generation';
 import { CARD_TYPES, type CardType, type StudyDocument } from '@/lib/db';
 import { CARD_TYPE_META } from '@/lib/labels';
 import { chunkText } from '@/lib/text';
 import { cn, errorMessage, pluralize } from '@/lib/utils';
-import { generateFromDocument, type GenerationProgress } from '@/services/ai/generate';
+import { generationStore } from '@/services/ai/generation-store';
 
 export interface GenerateCardsDialogProps {
   open: boolean;
@@ -52,11 +53,12 @@ export function GenerateCardsDialog({
   const [types, setTypes] = useState<CardType[]>(['basic', 'cloze', 'case']);
   const [cardsPerChunk, setCardsPerChunk] = useState(4);
   const [regenerateSummary, setRegenerateSummary] = useState(!hasSummary);
-  const [progress, setProgress] = useState<GenerationProgress | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const job = useGeneration();
 
   const chunkCount = chunkText(document.rawContent).length;
-  const running = progress !== null && progress.phase !== 'done' && progress.phase !== 'cancelled';
+  // Postęp dotyczy tego dokumentu tylko wtedy, gdy zadanie jest właśnie jego.
+  const running = job.status === 'running' && job.documentId === document.id;
+  const finishedHere = job.status !== 'idle' && job.status !== 'running' && job.documentId === document.id;
 
   const toggleType = useCallback((type: CardType): void => {
     setTypes((current) =>
@@ -64,89 +66,26 @@ export function GenerateCardsDialog({
     );
   }, []);
 
-  const handleRun = useCallback(async (): Promise<void> => {
-    if (engine.status !== 'ready') {
-      toast({
-        title: 'Model nie jest gotowy',
-        description: 'Uruchom model w panelu silnika AI, a potem wróć tutaj.',
-        variant: 'error',
+  /**
+   * Zadanie żyje w store poza Reactem — okno można zamknąć, a proces trwa
+   * dalej i pokazuje się w pasku nagłówka.
+   */
+  const handleRun = useCallback((): void => {
+    void generationStore
+      .start({ document, deckId, allowedTypes: types, cardsPerChunk, regenerateSummary })
+      .catch((error: unknown) => {
+        toast({
+          title: 'Generowanie nie powiodło się',
+          description: errorMessage(error),
+          variant: 'error',
+        });
       });
-      return;
-    }
-
-    const controller = new AbortController();
-    abortRef.current = controller;
-    setProgress({
-      phase: 'preparing',
-      chunkNumber: 0,
-      chunkCount,
-      cardsGenerated: 0,
-      message: 'Analiza materiału…',
-    });
-
-    try {
-      const result = await generateFromDocument({
-        document,
-        deckId,
-        allowedTypes: types,
-        cardsPerChunk,
-        regenerateSummary,
-        signal: controller.signal,
-        onProgress: setProgress,
-      });
-
-      const details = [
-        result.rejected > 0 ? `${result.rejected} odrzucono w walidacji` : null,
-        result.correctedExcerpts > 0 ? `${result.correctedExcerpts} cytatów skorygowano` : null,
-        result.failedChunks > 0 ? `${result.failedChunks} fragmentów nieudanych` : null,
-      ]
-        .filter((part): part is string => part !== null)
-        .join(' · ');
-
-      toast({
-        title: result.cancelled
-          ? `Przerwano — zapisano ${pluralize(result.cardsAdded, 'fiszkę', 'fiszki', 'fiszek')}`
-          : `Dodano ${pluralize(result.cardsAdded, 'fiszkę', 'fiszki', 'fiszek')}`,
-        ...(details.length > 0 ? { description: details } : {}),
-        variant: result.cardsAdded > 0 ? 'success' : 'info',
-      });
-
-      if (!result.cancelled) onOpenChange(false);
-    } catch (error) {
-      toast({ title: 'Generowanie nie powiodło się', description: errorMessage(error), variant: 'error' });
-    } finally {
-      abortRef.current = null;
-      setProgress(null);
-    }
-  }, [
-    cardsPerChunk,
-    chunkCount,
-    deckId,
-    document,
-    engine.status,
-    onOpenChange,
-    regenerateSummary,
-    toast,
-    types,
-  ]);
-
-  const handleStop = useCallback((): void => {
-    abortRef.current?.abort();
-  }, []);
-
-  const percent =
-    progress === null || progress.chunkCount === 0
-      ? 0
-      : Math.round((progress.chunkNumber / progress.chunkCount) * 100);
+    // Zamykamy okno od razu — dalszy postęp widać w pasku u góry.
+    onOpenChange(false);
+  }, [cardsPerChunk, deckId, document, onOpenChange, regenerateSummary, toast, types]);
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        if (running) return; // Nie zamykamy okna w trakcie pracy modelu.
-        onOpenChange(next);
-      }}
-    >
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -159,19 +98,8 @@ export function GenerateCardsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {running ? (
-          <div className="space-y-3" aria-live="polite">
-            <Progress value={percent} indeterminate={progress.phase === 'preparing'} />
-            <p className="text-sm">{progress.message}</p>
-            <p className="text-xs text-muted-foreground">
-              Przyjętych fiszek: {progress.cardsGenerated}
-              {progress.chunkCount > 0 && ` · fragment ${progress.chunkNumber}/${progress.chunkCount}`}
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Generowanie dużego materiału na słabszym GPU może potrwać kilka minut. Okno możesz
-              zostawić otwarte — postęp jest zapisywany po każdym fragmencie.
-            </p>
-          </div>
+        {running || finishedHere ? (
+          <GenerationProgressPanel job={job} />
         ) : (
           <div className="space-y-4">
             <div className="space-y-2">
@@ -244,9 +172,23 @@ export function GenerateCardsDialog({
 
         <DialogFooter>
           {running ? (
-            <Button variant="destructive" onClick={handleStop}>
-              <Square className="size-4" />
-              Zatrzymaj
+            <>
+              <Button variant="ghost" onClick={() => onOpenChange(false)}>
+                Ukryj okno
+              </Button>
+              <Button variant="destructive" onClick={() => generationStore.cancel()}>
+                <Square className="size-4" />
+                Zatrzymaj
+              </Button>
+            </>
+          ) : finishedHere ? (
+            <Button
+              onClick={() => {
+                generationStore.dismiss();
+                onOpenChange(false);
+              }}
+            >
+              Zamknij
             </Button>
           ) : (
             <>
@@ -254,15 +196,15 @@ export function GenerateCardsDialog({
                 Anuluj
               </Button>
               <Button
-                onClick={() => void handleRun()}
-                disabled={types.length === 0 || engine.status !== 'ready'}
+                onClick={handleRun}
+                disabled={types.length === 0 || engine.status === 'unsupported'}
               >
                 {engine.status === 'ready' ? (
                   <Sparkles className="size-4" />
                 ) : (
-                  <Loader2 className="size-4 animate-spin" />
+                  <Download className="size-4" />
                 )}
-                Generuj
+                {engine.status === 'ready' ? 'Generuj' : 'Uruchom model i generuj'}
               </Button>
             </>
           )}

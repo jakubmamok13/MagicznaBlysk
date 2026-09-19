@@ -12,16 +12,49 @@ import { llmEngine } from './engine';
 import { buildChunkPrompt, SYSTEM_PROMPT } from './prompt';
 import { buildGenerationSchema, dedupeKey, parseGenerationResponse } from './schema';
 
-export type GenerationPhase = 'preparing' | 'generating' | 'saving' | 'done' | 'cancelled';
+export type GenerationPhase =
+  /** Wczytywanie modelu do pamięci GPU. */
+  | 'loading-model'
+  /** Podział materiału na fragmenty. */
+  | 'analyzing'
+  /** Model pracuje nad kolejnymi fragmentami. */
+  | 'generating'
+  /** Zapis kompendium. */
+  | 'saving'
+  | 'done'
+  | 'cancelled';
+
+/** Kolejność etapów pokazywana użytkownikowi. */
+export const GENERATION_PHASES: readonly GenerationPhase[] = [
+  'loading-model',
+  'analyzing',
+  'generating',
+  'saving',
+] as const;
+
+export const PHASE_LABELS: Record<GenerationPhase, string> = {
+  'loading-model': 'Uruchamianie modelu',
+  analyzing: 'Analiza materiału',
+  generating: 'Tworzenie fiszek',
+  saving: 'Zapisywanie kompendium',
+  done: 'Gotowe',
+  cancelled: 'Przerwano',
+};
 
 export interface GenerationProgress {
   phase: GenerationPhase;
   /** Numer przetwarzanego fragmentu (1-indeksowany, 0 przed startem). */
   chunkNumber: number;
   chunkCount: number;
-  /** Liczba przyjętych fiszek do tej pory. */
+  /** Liczba fiszek zapisanych do tej pory. */
   cardsGenerated: number;
   message: string;
+  /** Fiszki z ostatnio przetworzonego fragmentu — podgląd na żywo. */
+  newCards: DraftCard[];
+  /** Czas od startu w ms. */
+  elapsedMs: number;
+  /** Szacowany czas do końca w ms; `null`, dopóki nie ma z czego liczyć. */
+  etaMs: number | null;
 }
 
 export interface GenerationOptions {
@@ -67,12 +100,25 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
     throw new Error('Wybierz przynajmniej jeden typ fiszek.');
   }
 
+  const startedAt = Date.now();
+  const chunkDurations: number[] = [];
+
+  /** Średni czas fragmentu × pozostałe fragmenty. */
+  const estimateRemaining = (done: number, total: number): number | null => {
+    if (chunkDurations.length === 0) return null;
+    const average = chunkDurations.reduce((sum, value) => sum + value, 0) / chunkDurations.length;
+    return Math.max(0, Math.round(average * (total - done)));
+  };
+
   report({
-    phase: 'preparing',
+    phase: 'analyzing',
     chunkNumber: 0,
     chunkCount: 0,
     cardsGenerated: 0,
-    message: 'Analiza materiału…',
+    message: 'Dzielenie materiału na fragmenty…',
+    newCards: [],
+    elapsedMs: 0,
+    etaMs: null,
   });
 
   const chunks = chunkText(document.rawContent);
@@ -83,8 +129,8 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   const schema = buildGenerationSchema(allowedTypes);
   const seenFronts = new Set<string>();
   const summaries: string[] = [];
-  const collected: DraftCard[] = [];
 
+  let cardsAdded = 0;
   let rejected = 0;
   let correctedExcerpts = 0;
   let failedChunks = 0;
@@ -106,12 +152,16 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
       }
 
       const chunkNumber = chunk.index + 1;
+      const chunkStartedAt = Date.now();
       report({
         phase: 'generating',
         chunkNumber,
         chunkCount: chunks.length,
-        cardsGenerated: collected.length,
+        cardsGenerated: cardsAdded,
         message: `Fragment ${chunkNumber} z ${chunks.length} — model pracuje lokalnie…`,
+        newCards: [],
+        elapsedMs: Date.now() - startedAt,
+        etaMs: estimateRemaining(chunk.index, chunks.length),
       });
 
       try {
@@ -142,9 +192,28 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
         });
 
         if (parsed.summary.length > 0) summaries.push(parsed.summary.trim());
-        collected.push(...parsed.cards);
         rejected += parsed.rejected;
         correctedExcerpts += parsed.correctedExcerpts;
+
+        /**
+         * Zapisujemy po każdym fragmencie, a nie na końcu: fiszki pojawiają się
+         * na liście od razu, a przerwanie lub awaria przeglądarki nie kasuje
+         * dotychczasowej pracy modelu.
+         */
+        const addedNow = await addCardsToDeck(deckId, parsed.cards);
+        cardsAdded += addedNow;
+        chunkDurations.push(Date.now() - chunkStartedAt);
+
+        report({
+          phase: 'generating',
+          chunkNumber,
+          chunkCount: chunks.length,
+          cardsGenerated: cardsAdded,
+          message: `Fragment ${chunkNumber} z ${chunks.length} — dodano ${addedNow} fiszek.`,
+          newCards: parsed.cards,
+          elapsedMs: Date.now() - startedAt,
+          etaMs: estimateRemaining(chunkNumber, chunks.length),
+        });
       } catch (error) {
         if (isAborted()) {
           cancelled = true;
@@ -164,11 +233,12 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
     phase: 'saving',
     chunkNumber: chunks.length,
     chunkCount: chunks.length,
-    cardsGenerated: collected.length,
-    message: 'Zapisywanie fiszek na urządzeniu…',
+    cardsGenerated: cardsAdded,
+    message: 'Zapisywanie kompendium…',
+    newCards: [],
+    elapsedMs: Date.now() - startedAt,
+    etaMs: 0,
   });
-
-  const cardsAdded = await addCardsToDeck(deckId, collected);
 
   const summary = composeSummary(document, summaries);
   const shouldWriteSummary =
@@ -182,7 +252,10 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
     chunkNumber: chunks.length,
     chunkCount: chunks.length,
     cardsGenerated: cardsAdded,
-    message: cancelled ? 'Generowanie przerwane — zapisano dotychczasowe fiszki.' : 'Gotowe.',
+    message: cancelled ? 'Przerwano — zapisano dotychczasowe fiszki.' : 'Gotowe.',
+    newCards: [],
+    elapsedMs: Date.now() - startedAt,
+    etaMs: 0,
   });
 
   return {
