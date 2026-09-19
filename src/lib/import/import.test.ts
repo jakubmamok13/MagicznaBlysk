@@ -6,6 +6,8 @@ import { installPromiseWithResolvers } from '@/lib/polyfills';
 import {
   describePdfError,
   disambiguateTitles,
+  errorDetails,
+  ExtractionError,
   joinTextItems,
   mergeDocuments,
   normalizeWhitespace,
@@ -83,6 +85,13 @@ describe('joinTextItems (PDF)', () => {
   it('pomija elementy bez tekstu', () => {
     expect(joinTextItems([{ hasEOL: true }, { str: 'ok', hasEOL: true }, null, 42])).toBe('ok');
   });
+
+  it('nie wywraca się, gdy pdf.js nie zwróci tablicy', () => {
+    // Bez tego `for..of` rzucałby „undefined is not a function”.
+    expect(joinTextItems(undefined)).toBe('');
+    expect(joinTextItems(null)).toBe('');
+    expect(joinTextItems({ items: [] })).toBe('');
+  });
 });
 
 describe('mergeDocuments', () => {
@@ -118,6 +127,26 @@ describe('describePdfError', () => {
 
   it('pozostałe błędy przekazuje dalej', () => {
     expect(describePdfError('coś dziwnego')).toContain('coś dziwnego');
+  });
+});
+
+describe('errorDetails i ExtractionError', () => {
+  it('zawiera etap, nazwę błędu i początek stosu', () => {
+    const details = errorDetails(new TypeError('undefined is not a function'), 'strona 3');
+    expect(details).toContain('[strona 3]');
+    expect(details).toContain('TypeError');
+    expect(details).toContain('undefined is not a function');
+  });
+
+  it('radzi sobie z wartością, która nie jest błędem', () => {
+    expect(errorDetails('coś poszło nie tak', 'test')).toContain('coś poszło nie tak');
+  });
+
+  it('ExtractionError niesie komunikat i szczegóły osobno', () => {
+    const error = new ExtractionError('Przyjazny komunikat', '[etap] TypeError: szczegóły');
+    expect(error.message).toBe('Przyjazny komunikat');
+    expect(error.details).toContain('TypeError');
+    expect(error).toBeInstanceOf(Error);
   });
 });
 

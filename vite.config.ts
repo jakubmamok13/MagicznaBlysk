@@ -139,6 +139,14 @@ export default defineConfig({
       },
     }),
   ],
+  define: {
+    // Znacznik builda — pozwala jednoznacznie stwierdzić, którą wersję
+    // aplikacji ma użytkownik (PWA potrafi długo serwować kopię z cache).
+    __BUILD_ID__: JSON.stringify(
+      (process.env['GITHUB_SHA'] ?? 'dev').slice(0, 7),
+    ),
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString().slice(0, 16).replace('T', ' ')),
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

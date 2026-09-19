@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
   CheckCircle2,
+  ClipboardCopy,
   FileText,
   FileUp,
   Loader2,
@@ -38,6 +39,7 @@ import {
   type ExtractionProgress,
 } from '@/lib/import/extract';
 import { FILE_ACCEPT_ATTRIBUTE, FORMAT_LABELS } from '@/lib/import/formats';
+import { buildDiagnostics, copyToClipboard } from '@/lib/build-info';
 import { SAMPLE_DOCUMENT_CONTENT, SAMPLE_DOCUMENT_TITLE } from '@/lib/sample';
 import { countWords, readingTimeMinutes } from '@/lib/text';
 import { errorMessage, pluralize } from '@/lib/utils';
@@ -68,6 +70,7 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
   const [progress, setProgress] = useState<ExtractionProgress | null>(null);
   const [mergeIntoOne, setMergeIntoOne] = useState(false);
   const [mergedTitle, setMergedTitle] = useState('');
+  const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const words = countWords(content);
@@ -118,6 +121,21 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
     },
     [mergedTitle.length, toast],
   );
+
+  /** Kopiuje raport diagnostyczny — użytkownik może go wkleić w zgłoszeniu. */
+  const handleCopyDiagnostics = useCallback(async (): Promise<void> => {
+    const report = buildDiagnostics(failures);
+    const ok = await copyToClipboard(report);
+    if (ok) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2500);
+      return;
+    }
+    toast({
+      title: 'Skopiuj raport ręcznie',
+      description: 'Przeglądarka nie udostępniła schowka — szczegóły są rozwinięte pod nazwą pliku.',
+    });
+  }, [failures, toast]);
 
   const removeDocument = useCallback((index: number): void => {
     setDocuments((current) => current.filter((_, i) => i !== index));
@@ -350,19 +368,38 @@ export function ImportDocumentDialog({ trigger }: ImportDocumentDialogProps): Re
                   Pominięto {pluralize(failures.length, 'plik', 'pliki', 'plików')}
                 </p>
                 {failures.map((failure) => (
-                  <p key={failure.fileName} className="text-xs text-destructive">
-                    <span className="font-medium">{failure.fileName}</span> — {failure.reason}
-                  </p>
+                  <div key={failure.fileName} className="text-xs text-destructive">
+                    <p>
+                      <span className="font-medium">{failure.fileName}</span> — {failure.reason}
+                    </p>
+                    <details className="mt-0.5">
+                      <summary className="cursor-pointer opacity-80">Szczegóły techniczne</summary>
+                      <p className="mt-1 break-words font-mono text-[10px] opacity-90">
+                        {failure.details}
+                      </p>
+                    </details>
+                  </div>
                 ))}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 text-xs"
-                  onClick={() => setFailures([])}
-                >
-                  <X className="size-3" />
-                  Ukryj
-                </Button>
+                <div className="flex flex-wrap gap-1">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => void handleCopyDiagnostics()}
+                  >
+                    <ClipboardCopy className="size-3" />
+                    {copied ? 'Skopiowano' : 'Kopiuj raport'}
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 text-xs"
+                    onClick={() => setFailures([])}
+                  >
+                    <X className="size-3" />
+                    Ukryj
+                  </Button>
+                </div>
               </div>
             )}
 

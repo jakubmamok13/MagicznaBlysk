@@ -22,7 +22,37 @@ export interface ExtractedDocument {
 
 export interface ExtractionFailure {
   fileName: string;
+  /** Komunikat dla użytkownika. */
   reason: string;
+  /** Szczegóły techniczne (nazwa błędu, etap, początek stosu) do zgłoszenia. */
+  details: string;
+}
+
+/** Błąd niosący dodatkowo dane diagnostyczne. */
+export class ExtractionError extends Error {
+  readonly details: string;
+
+  constructor(message: string, details: string) {
+    super(message);
+    this.name = 'ExtractionError';
+    this.details = details;
+  }
+}
+
+/**
+ * Składa zwięzły opis techniczny błędu. Sam komunikat bywa bezużyteczny
+ * („undefined is not a function”), więc dokładamy etap i początek stosu —
+ * to jedyna droga, by zdiagnozować awarię na cudzym urządzeniu.
+ */
+export function errorDetails(error: unknown, phase: string): string {
+  const normalized = error instanceof Error ? error : new Error(String(error));
+  const frames = (normalized.stack ?? '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(0, 3)
+    .join(' <- ');
+  return `[${phase}] ${normalized.name}: ${normalized.message}${frames ? ` @ ${frames}` : ''}`;
 }
 
 export interface ExtractionProgress {
@@ -140,31 +170,50 @@ async function extractPdf(
     pdf = await loadingTask.promise;
   } catch (error) {
     await loadingTask.destroy();
-    const message = errorMessage(error);
-    if (/password/i.test(message)) {
-      throw new Error('PDF jest zabezpieczony hasłem — usuń hasło i spróbuj ponownie.');
-    }
-    throw new Error(`Nie udało się otworzyć PDF-a: ${message}`);
+    worker?.terminate();
+    throw new ExtractionError(
+      describePdfError(errorMessage(error)),
+      errorDetails(error, 'otwieranie dokumentu'),
+    );
   }
 
   const pages: string[] = [];
+  const pageErrors: string[] = [];
   let emptyPages = 0;
 
   try {
     for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
       onProgress?.(pageNumber / pdf.numPages, `Strona ${pageNumber} z ${pdf.numPages}…`);
-      const page = await pdf.getPage(pageNumber);
-      const content = await page.getTextContent();
-      const pageText = joinTextItems(content.items);
-      if (pageText.trim().length === 0) emptyPages += 1;
-      else pages.push(pageText);
-      page.cleanup();
+      // Błąd jednej strony nie może przekreślać całego dokumentu.
+      try {
+        const page = await pdf.getPage(pageNumber);
+        const content = await page.getTextContent();
+        const pageText = joinTextItems(content?.items);
+        if (pageText.trim().length === 0) emptyPages += 1;
+        else pages.push(pageText);
+        page.cleanup();
+      } catch (error) {
+        pageErrors.push(errorDetails(error, `strona ${pageNumber}`));
+      }
     }
   } finally {
     await loadingTask.destroy();
     // Port workera nie jest współdzielony między importami — zwalniamy go.
     worker?.terminate();
     pdfjs.GlobalWorkerOptions.workerPort = null;
+  }
+
+  // Żadnego tekstu i same błędy — dopiero to jest porażką całego pliku.
+  if (pages.length === 0 && pageErrors.length > 0) {
+    throw new ExtractionError(
+      describePdfError(pageErrors[0] ?? 'Nie udało się odczytać stron PDF-a.'),
+      pageErrors.slice(0, 2).join(' || '),
+    );
+  }
+  if (pageErrors.length > 0) {
+    warnings.push(
+      `Pominięto ${pageErrors.length} stron z powodu błędów odczytu — reszta tekstu została wczytana.`,
+    );
   }
 
   if (emptyPages > 0) {
@@ -209,7 +258,11 @@ interface PdfTextLike {
  * pdf.js zwraca osobne elementy dla każdego przebiegu czcionki, a znacznik
  * `hasEOL` wyznacza koniec wiersza — bez tego cały PDF byłby jednym ciągiem.
  */
-export function joinTextItems(items: readonly unknown[]): string {
+export function joinTextItems(items: unknown): string {
+  // pdf.js mógłby zwrócić coś innego niż tablica — `for..of` rzuciłby wtedy
+  // „undefined is not a function”, czyli komunikat bez żadnej wartości.
+  if (!Array.isArray(items)) return '';
+
   let line = '';
   const lines: string[] = [];
 
@@ -326,7 +379,14 @@ export async function extractFromFiles(
     try {
       documents.push(await extractFromFile(file, report));
     } catch (error) {
-      failures.push({ fileName: file.name, reason: errorMessage(error) });
+      failures.push({
+        fileName: file.name,
+        reason: errorMessage(error),
+        details:
+          error instanceof ExtractionError
+            ? error.details
+            : errorDetails(error, 'odczyt pliku'),
+      });
     }
   }
 

@@ -27,6 +27,7 @@ import {
   requestPersistentStorage,
   type StorageEstimateInfo,
 } from '@/lib/backup';
+import { BUILD_ID, BUILD_TIME } from '@/lib/build-info';
 import { wipeAllData } from '@/lib/db';
 import { errorMessage, formatBytes } from '@/lib/utils';
 
@@ -236,6 +237,9 @@ export function SettingsPage(): React.JSX.Element {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2 text-sm text-muted-foreground">
+          <p className="font-mono text-xs">
+            Wersja aplikacji: {BUILD_ID} ({BUILD_TIME})
+          </p>
           <p>
             CognitiveDeck nie ma backendu. Materiały, fiszki i historia powtórek zapisywane są w
             IndexedDB tej przeglądarki, a model językowy działa na Twoim GPU przez WebGPU.
