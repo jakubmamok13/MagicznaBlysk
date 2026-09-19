@@ -1,0 +1,22 @@
+# Zależności
+node_modules
+
+# Build
+dist
+dist-ssr
+dev-dist
+*.local
+
+# Narzędzia
+.vite
+.eslintcache
+node_modules/.tmp
+coverage
+
+# Edytory / system
+.DS_Store
+.idea
+.vscode/*
+!.vscode/extensions.json
+*.log
+npm-debug.log*

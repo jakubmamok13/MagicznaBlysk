@@ -1,0 +1,196 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 243 75% 59%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 243 75% 96%;
+    --accent-foreground: 243 75% 40%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 210 40% 98%;
+    --success: 152 69% 36%;
+    --success-foreground: 210 40% 98%;
+    --warning: 32 95% 44%;
+    --warning-foreground: 210 40% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 243 75% 59%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 222 47% 9%;
+    --foreground: 210 40% 96%;
+    --card: 222 40% 12%;
+    --card-foreground: 210 40% 96%;
+    --popover: 222 44% 11%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 239 84% 67%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 17%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 239 40% 22%;
+    --accent-foreground: 239 84% 82%;
+    --destructive: 0 63% 50%;
+    --destructive-foreground: 210 40% 98%;
+    --success: 152 60% 45%;
+    --success-foreground: 222 47% 11%;
+    --warning: 38 92% 55%;
+    --warning-foreground: 222 47% 11%;
+    --border: 217 33% 20%;
+    --input: 217 33% 22%;
+    --ring: 239 84% 67%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    overscroll-behavior-y: none;
+  }
+
+  /* Widoczny focus dla nawigacji klawiaturą (a11y). */
+  :focus-visible {
+    @apply outline-none ring-2 ring-ring ring-offset-2 ring-offset-background;
+  }
+}
+
+@layer components {
+  /* --- Animacja obrotu 3D fiszki --- */
+  .flip-scene {
+    perspective: 1600px;
+  }
+
+  .flip-card {
+    position: relative;
+    transform-style: preserve-3d;
+    transition: transform 520ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .flip-card[data-flipped='true'] {
+    transform: rotateY(180deg);
+  }
+
+  .flip-face {
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  .flip-face-back {
+    position: absolute;
+    inset: 0;
+    transform: rotateY(180deg);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .flip-card {
+      transition-duration: 1ms;
+    }
+  }
+
+  /* --- Treść markdown (kompendium / materiał źródłowy) --- */
+  .markdown-body {
+    @apply text-sm leading-relaxed text-foreground/90;
+  }
+
+  .markdown-body > * + * {
+    @apply mt-3;
+  }
+
+  .markdown-body h1 {
+    @apply mt-6 text-xl font-semibold tracking-tight text-foreground;
+  }
+
+  .markdown-body h2 {
+    @apply mt-6 text-lg font-semibold tracking-tight text-foreground;
+  }
+
+  .markdown-body h3 {
+    @apply mt-4 text-base font-semibold text-foreground;
+  }
+
+  .markdown-body p {
+    @apply leading-relaxed;
+  }
+
+  .markdown-body ul {
+    @apply list-disc space-y-1 pl-5;
+  }
+
+  .markdown-body ol {
+    @apply list-decimal space-y-1 pl-5;
+  }
+
+  .markdown-body blockquote {
+    @apply border-l-2 border-primary/50 pl-4 italic text-muted-foreground;
+  }
+
+  .markdown-body code {
+    @apply rounded bg-muted px-1.5 py-0.5 font-mono text-[0.8em];
+  }
+
+  .markdown-body pre {
+    @apply overflow-x-auto rounded-lg bg-muted p-3;
+  }
+
+  .markdown-body pre code {
+    @apply bg-transparent p-0;
+  }
+
+  .markdown-body a {
+    @apply text-primary underline underline-offset-2;
+  }
+
+  .markdown-body table {
+    @apply w-full border-collapse text-xs;
+  }
+
+  .markdown-body th,
+  .markdown-body td {
+    @apply border border-border px-2 py-1 text-left;
+  }
+
+  .markdown-body hr {
+    @apply my-4 border-border;
+  }
+
+  .markdown-body strong {
+    @apply font-semibold text-foreground;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .safe-bottom {
+    padding-bottom: max(env(safe-area-inset-bottom), 0.5rem);
+  }
+}
