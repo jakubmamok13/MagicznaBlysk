@@ -1,0 +1,24 @@
+# Aplikacja jest w całości statyczna (brak backendu).
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Routing po stronie klienta (BrowserRouter): każde wejście bezpośrednie
+# — np. /study/3 z ikony na ekranie głównym — musi dostać index.html.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Service Worker i manifest nie mogą być cache'owane przez CDN,
+# inaczej aktualizacje aplikacji nie docierają do użytkowników.
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+    Content-Type = "application/manifest+json"
