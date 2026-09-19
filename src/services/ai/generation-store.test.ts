@@ -99,7 +99,7 @@ describe('generationStore', () => {
   });
 
   it('gromadzi podgląd ostatnich fiszek i aktualizuje etapy', async () => {
-    generateFromDocument.mockImplementation(async (options) => {
+    generateFromDocument.mockImplementation((options) => {
       options.onProgress?.(
         progress({
           chunkNumber: 1,
@@ -115,7 +115,7 @@ describe('generationStore', () => {
       expect(mid.phase).toBe('generating');
       expect(mid.preview).toHaveLength(2);
       expect(mid.cardsAdded).toBe(2);
-      return RESULT;
+      return Promise.resolve(RESULT);
     });
 
     await generationStore.start(START);
@@ -123,7 +123,7 @@ describe('generationStore', () => {
   });
 
   it('ogranicza podgląd do kilku ostatnich fiszek', async () => {
-    generateFromDocument.mockImplementation(async (options) => {
+    generateFromDocument.mockImplementation((options) => {
       for (let i = 0; i < 5; i += 1) {
         options.onProgress?.(
           progress({
@@ -134,7 +134,7 @@ describe('generationStore', () => {
           }),
         );
       }
-      return RESULT;
+      return Promise.resolve(RESULT);
     });
 
     await generationStore.start(START);
@@ -142,10 +142,10 @@ describe('generationStore', () => {
   });
 
   it('przerwanie oznacza zadanie jako anulowane i zatrzymuje model', async () => {
-    generateFromDocument.mockImplementation(async (options) => {
+    generateFromDocument.mockImplementation((options) => {
       generationStore.cancel();
       expect(options.signal?.aborted).toBe(true);
-      return { ...RESULT, cancelled: true, cardsAdded: 3 };
+      return Promise.resolve({ ...RESULT, cancelled: true, cardsAdded: 3 });
     });
 
     await generationStore.start(START);

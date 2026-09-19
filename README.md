@@ -20,6 +20,7 @@ modelu językowego; potem aplikacja działa offline.
 - [Import materiałów](#import-materiałów)
 - [OCR skanów](#ocr-skanów)
 - [Potok AI](#potok-ai)
+- [Generowanie w tle](#generowanie-w-tle)
 - [Algorytm SM-2](#algorytm-sm-2)
 - [Tryb offline i PWA](#tryb-offline-i-pwa)
 - [Instalacja na telefonie](#instalacja-na-telefonie)
@@ -193,6 +194,28 @@ słabej jakości skanu.
 
 Błąd pojedynczego fragmentu (np. brak pamięci GPU) nie przerywa całości — potok liczy niepowodzenia
 i raportuje je w podsumowaniu.
+
+## Generowanie w tle
+
+Zadanie generowania żyje w store poza drzewem Reacta (`services/ai/generation-store.ts`),
+tak samo jak stan silnika. Konsekwencje są praktyczne:
+
+- okno generowania można zamknąć — proces trwa dalej,
+- **pasek postępu w nagłówku** jest widoczny na każdym ekranie: etap, postęp,
+  liczba fiszek, szacowany czas i przycisk zatrzymania,
+- po zakończeniu pojawia się powiadomienie niezależnie od otwartego widoku,
+- w danym momencie działa jedno zadanie — model i tak zajmuje całe GPU,
+- gdy model nie jest wczytany, zadanie wczytuje go samo jako pierwszy etap.
+
+Przebieg jest rozbity na etapy pokazywane użytkownikowi: *uruchamianie modelu →
+analiza materiału → tworzenie fiszek (3/8) → zapis kompendium*. Czas do końca
+liczymy ze średniej z już przetworzonych fragmentów i pokazujemy dopiero wtedy,
+gdy jest z czego go policzyć. Na bieżąco widać też kilka ostatnio utworzonych fiszek.
+
+Fiszki zapisują się **po każdym fragmencie**, nie zbiorczo na końcu — pojawiają się
+od razu na liście materiału, a przerwanie albo awaria przeglądarki nie kasuje
+dotychczasowej pracy modelu.
+
 
 ## Algorytm SM-2
 
@@ -420,7 +443,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 82 testy: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 96 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```
