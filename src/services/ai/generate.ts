@@ -94,6 +94,8 @@ export interface GenerationResult {
   unverifiedExcerpts: number;
   /** Ile fragmentów wymagało powtórki, bo model nie zwrócił żadnej fiszki. */
   retriedChunks: number;
+  /** Ile razy trzeba było wczytać model ponownie po ubiciu workera. */
+  modelReloads: number;
   /**
    * Skrócona surowa odpowiedź modelu z pierwszego fragmentu bez fiszek —
    * jedyny sposób, by zdiagnozować „zero fiszek” na cudzym urządzeniu.
@@ -112,6 +114,18 @@ export interface GenerationResult {
  */
 const GENERATION_CHUNK_SIZE = 1800;
 
+/** Na telefonie pamięć jest znacznie ciaśniejsza — tniemy materiał drobniej. */
+const MOBILE_CHUNK_SIZE = 1100;
+
+/** Krótka przerwa między fragmentami: daje przeglądarce chwilę na zwolnienie pamięci. */
+const CHUNK_BREATHER_MS = 120;
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function outputTokenBudget(cardsPerChunk: number): number {
   return Math.min(1400, Math.max(600, 400 + 160 * cardsPerChunk));
 }
@@ -119,12 +133,27 @@ function outputTokenBudget(cardsPerChunk: number): number {
 /** Po tylu błędach pod rząd przerywamy — coś jest nie tak systemowo. */
 const MAX_CONSECUTIVE_FAILURES = 3;
 
+/** Ile razy wolno wczytać model ponownie po ubiciu workera przez system. */
+const MAX_MODEL_RELOADS = 3;
+
+/**
+ * Worker z modelem bywa ubijany przez system (na telefonie to codzienność przy
+ * napiętej pamięci — ekran mignie i strona wraca). Obiekt silnika w JS żyje
+ * dalej, ale worker nie ma już modelu, więc każde kolejne zapytanie kończy się
+ * `ModelNotLoadedError`. To błąd ODWRACALNY: wystarczy wczytać model ponownie.
+ */
+function isModelUnloadedError(message: string): boolean {
+  return /modelnotloadederror|model not loaded|reload\(model\)/i.test(message);
+}
+
 /**
  * Błędy, po których silnik nie nadaje się do dalszej pracy: utrata urządzenia
  * GPU, brak pamięci, przepełnienie kontekstu. Dalsze fragmenty i tak poległyby
  * tak samo, więc przerywamy od razu zamiast mielić kilka minut.
  */
 export function isFatalEngineError(message: string): boolean {
+  // Ubity worker nie jest awarią krytyczną — model da się wczytać ponownie.
+  if (isModelUnloadedError(message)) return false;
   return /device lost|out of memory|\boom\b|context window|exceed|webgpu|adapter|destroyed|detached|aborted\(\)|unreachable/i.test(
     message,
   );
@@ -166,7 +195,11 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
     etaMs: null,
   });
 
-  const chunks = chunkText(document.rawContent, GENERATION_CHUNK_SIZE);
+  const isMobile = llmEngine.getState().profile.isMobile;
+  const chunks = chunkText(
+    document.rawContent,
+    isMobile ? MOBILE_CHUNK_SIZE : GENERATION_CHUNK_SIZE,
+  );
   if (chunks.length === 0) {
     throw new Error('Materiał jest pusty — dodaj treść, z której mają powstać fiszki.');
   }
@@ -185,8 +218,41 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   let returned = 0;
   let unverifiedExcerpts = 0;
   let retriedChunks = 0;
+  let modelReloads = 0;
   let debugSample: string | null = null;
   const cardsOnlySchema = buildCardsOnlySchema(allowedTypes);
+
+  /**
+   * Zapytanie do modelu z samoregeneracją: gdy system ubije workera, wczytujemy
+   * model ponownie i powtarzamy ten sam fragment, zamiast przerywać całość.
+   */
+  const askModel = async (
+    request: Parameters<typeof llmEngine.generateJson>[0],
+    chunkNumber: number,
+    chunkCount: number,
+  ): Promise<string> => {
+    try {
+      return await llmEngine.generateJson(request);
+    } catch (error) {
+      const message = errorMessage(error);
+      if (!isModelUnloadedError(message) || modelReloads >= MAX_MODEL_RELOADS) throw error;
+
+      modelReloads += 1;
+      report({
+        phase: 'loading-model',
+        chunkNumber,
+        chunkCount,
+        cardsGenerated: cardsAdded,
+        message: `System zwolnił pamięć modelu — wczytuję go ponownie (${modelReloads}/${MAX_MODEL_RELOADS})…`,
+        newCards: [],
+        elapsedMs: Date.now() - startedAt,
+        etaMs: null,
+      });
+
+      await llmEngine.load();
+      return llmEngine.generateJson(request);
+    }
+  };
   const rejections: RejectionStats = { incomplete: 0, duplicate: 0, ungrounded: 0 };
 
   // Czytamy flagę przez funkcję — inaczej analiza przepływu TS „zamraża”
@@ -218,7 +284,8 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
       });
 
       try {
-        const raw = await llmEngine.generateJson({
+        const raw = await askModel(
+          {
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             {
@@ -236,7 +303,10 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
           schema,
           maxTokens: outputTokenBudget(cardsPerChunk),
           temperature: 0.3,
-        });
+          },
+          chunkNumber,
+          chunks.length,
+        );
 
         const context = { source: chunk.content, allowedTypes, seenFronts };
         let parsed = parseGenerationResponse(raw, context);
@@ -252,7 +322,8 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
           }
           retriedChunks += 1;
 
-          const retryRaw = await llmEngine.generateJson({
+          const retryRaw = await askModel(
+            {
             messages: [
               {
                 role: 'system',
@@ -274,7 +345,10 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
             schema: cardsOnlySchema,
             maxTokens: outputTokenBudget(cardsPerChunk),
             temperature: 0.5,
-          });
+            },
+            chunkNumber,
+            chunks.length,
+          );
 
           const retried = parseGenerationResponse(retryRaw, context);
           if (retried.returned > 0) {
@@ -301,6 +375,9 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
         const addedNow = await addCardsToDeck(deckId, parsed.cards);
         cardsAdded += addedNow;
         consecutiveFailures = 0;
+
+        // Oddech między fragmentami — bez tego telefon łatwiej ubija workera.
+        if (chunkNumber < chunks.length) await pause(CHUNK_BREATHER_MS);
         chunkDurations.push(Date.now() - chunkStartedAt);
 
         report({
@@ -379,6 +456,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
     cardsAdded,
     fatalError,
     retriedChunks,
+    modelReloads,
     debugSample,
     returned,
     rejections,

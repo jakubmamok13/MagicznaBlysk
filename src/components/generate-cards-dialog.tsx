@@ -51,7 +51,9 @@ export function GenerateCardsDialog({
   const engine = useEngine();
   const { toast } = useToast();
   const [types, setTypes] = useState<CardType[]>(['basic', 'cloze', 'case']);
-  const [cardsPerChunk, setCardsPerChunk] = useState(4);
+  // Na telefonie mniejsza porcja: krótsza odpowiedź modelu to mniejsze ryzyko,
+  // że system ubije workera w trakcie generowania.
+  const [cardsPerChunk, setCardsPerChunk] = useState(() => (engine.profile.isMobile ? 2 : 4));
   const [regenerateSummary, setRegenerateSummary] = useState(!hasSummary);
   const job = useGeneration();
 

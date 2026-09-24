@@ -6,6 +6,8 @@ const updateDocumentSummary = vi.fn<(documentId: number, summary: string) => Pro
 const generateJson = vi.fn<() => Promise<string>>();
 const interrupt = vi.fn<() => void>();
 const unload = vi.fn<() => Promise<void>>();
+const load = vi.fn<() => Promise<void>>();
+const engineProfile = { isMobile: false };
 
 vi.mock('@/lib/db', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/db')>()),
@@ -19,6 +21,8 @@ vi.mock('./engine', () => ({
     generateJson: () => generateJson(),
     interrupt: () => interrupt(),
     unload: () => unload(),
+    load: () => load(),
+    getState: () => ({ profile: engineProfile }),
   },
 }));
 
@@ -53,6 +57,8 @@ describe('generateFromDocument', () => {
     vi.resetAllMocks();
     addCardsToDeck.mockImplementation((_deckId, drafts) => Promise.resolve(drafts.length));
     unload.mockResolvedValue();
+    load.mockResolvedValue();
+    engineProfile.isMobile = false;
     updateDocumentSummary.mockResolvedValue();
   });
 
@@ -200,6 +206,69 @@ describe('generateFromDocument', () => {
     expect(generateJson).toHaveBeenCalledTimes(1);
     expect(result.cancelled).toBe(true);
     expect(result.cardsAdded).toBe(1);
+  });
+
+  it('po ubiciu workera wczytuje model ponownie i kontynuuje', async () => {
+    // Tak wygląda ubicie workera przez system na telefonie.
+    const notLoaded = new Error(
+      'ModelNotLoadedError: Model not loaded before trying to complete ChatCompletionRequest.',
+    );
+    generateJson
+      .mockRejectedValueOnce(notLoaded)
+      .mockResolvedValue(
+        response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
+      );
+
+    const result = await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: true,
+    });
+
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(result.modelReloads).toBe(1);
+    expect(result.cardsAdded).toBeGreaterThan(0);
+    // To nie jest awaria krytyczna — przebieg trwa dalej.
+    expect(result.fatalError).toBeNull();
+  });
+
+  it('przy uporczywym ubijaniu workera nie zapętla się', async () => {
+    generateJson.mockRejectedValue(
+      new Error('ModelNotLoadedError: Model not loaded before trying to complete request.'),
+    );
+
+    const result = await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: true,
+    });
+
+    // Jedna próba wczytania modelu na fragment, nigdy więcej niż limit.
+    expect(result.modelReloads).toBeGreaterThan(0);
+    expect(result.modelReloads).toBeLessThanOrEqual(3);
+    expect(load).toHaveBeenCalledTimes(result.modelReloads);
+    expect(result.cardsAdded).toBe(0);
+    expect(result.failedChunks).toBeGreaterThan(0);
+  });
+
+  it('na telefonie tnie materiał na drobniejsze fragmenty', async () => {
+    generateJson.mockResolvedValue(JSON.stringify({ summary: '', cards: [] }));
+
+    engineProfile.isMobile = false;
+    const desktop = await generateFromDocument({
+      document: DOCUMENT, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
+    });
+
+    engineProfile.isMobile = true;
+    const mobile = await generateFromDocument({
+      document: DOCUMENT, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
+    });
+
+    expect(mobile.chunkCount).toBeGreaterThan(desktop.chunkCount);
   });
 
   it('awaria silnika przerywa przebieg i zwalnia model', async () => {

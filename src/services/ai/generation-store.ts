@@ -43,6 +43,8 @@ export interface GenerationJob {
   outcomeNote: string | null;
   /** Ile fragmentów wymagało powtórki. */
   retriedChunks: number;
+  /** Ile razy model trzeba było wczytać ponownie po ubiciu workera. */
+  modelReloads: number;
   /** Skrócona surowa odpowiedź modelu — do zgłoszenia problemu. */
   debugSample: string | null;
 }
@@ -75,6 +77,7 @@ const IDLE_JOB: GenerationJob = {
   returned: 0,
   outcomeNote: null,
   retriedChunks: 0,
+  modelReloads: 0,
   debugSample: null,
 };
 
@@ -198,6 +201,7 @@ class GenerationStore {
         failedChunks: result.failedChunks,
         returned: result.returned,
         retriedChunks: result.retriedChunks,
+        modelReloads: result.modelReloads,
         debugSample: result.debugSample,
         outcomeNote: describeOutcome(result),
         etaMs: 0,
@@ -243,8 +247,12 @@ export function describeOutcome(result: {
   rejections: { incomplete: number; duplicate: number; ungrounded: number };
   unverifiedExcerpts: number;
   retriedChunks?: number;
+  modelReloads?: number;
 }): string | null {
   if (result.cardsAdded === 0) {
+    if ((result.modelReloads ?? 0) >= 3) {
+      return 'System raz po raz zwalniał pamięć modelu i przerywał jego pracę. Na tym urządzeniu zabrakło pamięci — wybierz najmniejszy model (0.5B), zamknij inne karty, albo wygeneruj fiszki na komputerze i przenieś je kopią zapasową.';
+    }
     if ((result.retriedChunks ?? 0) > 0 && result.returned === 0) {
       return `Model odpowiadał, ale nie utworzył ani jednej fiszki — nawet po uproszczonej powtórce (${result.retriedChunks} prób). To zwykle za mały model: wybierz w Ustawieniach większy (3B) albo zmniejsz liczbę fiszek z fragmentu. Skopiuj raport i prześlij go, jeśli problem wróci.`;
     }
@@ -261,6 +269,10 @@ export function describeOutcome(result: {
   }
 
   const notes: string[] = [];
+  if ((result.modelReloads ?? 0) > 0)
+    notes.push(
+      `${result.modelReloads} razy trzeba było wczytać model ponownie — system zwalniał pamięć`,
+    );
   if (result.rejections.duplicate > 0) notes.push(`${result.rejections.duplicate} powtórzeń pominięto`);
   if (result.rejections.incomplete > 0) notes.push(`${result.rejections.incomplete} niekompletnych odrzucono`);
   if (result.rejections.ungrounded > 0)

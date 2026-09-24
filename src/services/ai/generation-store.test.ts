@@ -224,6 +224,12 @@ describe('describeOutcome', () => {
     unverifiedExcerpts: 0,
   };
 
+  it('po wielokrotnym ubiciu modelu mówi wprost o braku pamięci', () => {
+    const note = describeOutcome({ ...base, modelReloads: 3 });
+    expect(note).toMatch(/zabrakło pamięci/i);
+    expect(note).toMatch(/0\.5B|komputerze/);
+  });
+
   it('po nieudanych powtórkach podpowiada większy model', () => {
     const note = describeOutcome({ ...base, retriedChunks: 15 });
     expect(note).toMatch(/powtórce/);

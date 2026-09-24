@@ -218,6 +218,23 @@ analiza materiału → tworzenie fiszek (3/8) → zapis kompendium*. Czas do ko�
 liczymy ze średniej z już przetworzonych fragmentów i pokazujemy dopiero wtedy,
 gdy jest z czego go policzyć. Na bieżąco widać też kilka ostatnio utworzonych fiszek.
 
+### Gdy system ubije workera z modelem
+
+Na telefonie przy napiętej pamięci system potrafi zabić Web Workera, w którym
+działa model — ekran mignie, strona wraca, a obiekt silnika w JS żyje dalej, tyle
+że bez modelu. Każde kolejne zapytanie kończy się wtedy `ModelNotLoadedError`.
+
+To błąd **odwracalny**, więc potok nie przerywa pracy: wczytuje model ponownie
+(maksymalnie trzy razy w przebiegu) i powtarza ten sam fragment. Dopiero
+uporczywe powtarzanie się tej sytuacji kończy przebieg — z komunikatem mówiącym
+wprost, że na tym urządzeniu brakuje pamięci.
+
+Dodatkowo, gdy wykryjemy urządzenie mobilne:
+
+- fragmenty mają 1100 zamiast 1800 znaków,
+- domyślna liczba fiszek z fragmentu to 2 zamiast 4,
+- między fragmentami jest krótka przerwa, żeby przeglądarka zdążyła zwolnić pamięć.
+
 ### Gdy model zwraca pustą listę
 
 Gramatyka wymuszona przez `response_format` gwarantuje **kształt** odpowiedzi, ale nie jej
@@ -488,7 +505,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 111 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 115 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```
