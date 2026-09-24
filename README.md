@@ -224,8 +224,13 @@ Na telefonie przy napiętej pamięci system potrafi zabić Web Workera, w który
 działa model — ekran mignie, strona wraca, a obiekt silnika w JS żyje dalej, tyle
 że bez modelu. Każde kolejne zapytanie kończy się wtedy `ModelNotLoadedError`.
 
-To błąd **odwracalny**, więc potok nie przerywa pracy: wczytuje model ponownie
-(maksymalnie trzy razy w przebiegu) i powtarza ten sam fragment. Dopiero
+To błąd **odwracalny**, więc potok nie przerywa pracy: odzyskuje model przez
+`llmEngine.recover()` (maksymalnie trzy razy w przebiegu) i powtarza ten sam fragment.
+
+`recover()` celowo omija `load()`: ten wychodzi od razu, gdy stan silnika mówi
+„gotowy” — a stan nie wie, że system zwolnił pamięć workera. Najpierw próbujemy
+udokumentowanej drogi WebLLM (`reload()` po utracie urządzenia), a gdy worker nie
+odpowiada, tworzymy od zera nowy worker i nowy silnik. Dopiero
 uporczywe powtarzanie się tej sytuacji kończy przebieg — z komunikatem mówiącym
 wprost, że na tym urządzeniu brakuje pamięci.
 
@@ -505,7 +510,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 115 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 119 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```

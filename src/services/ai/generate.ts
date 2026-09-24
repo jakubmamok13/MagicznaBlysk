@@ -249,7 +249,8 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
         etaMs: null,
       });
 
-      await llmEngine.load();
+      // `recover()`, nie `load()` — ten drugi uznałby, że model wciąż jest gotowy.
+      await llmEngine.recover();
       return llmEngine.generateJson(request);
     }
   };

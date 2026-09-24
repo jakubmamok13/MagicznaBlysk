@@ -285,6 +285,73 @@ class LLMEngineService {
     return this.worker;
   }
 
+  /**
+   * Odzyskuje model po jego utracie w workerze (ModelNotLoadedError).
+   *
+   * Nie można tu użyć `load()`: ten wychodzi od razu, gdy stan mówi „gotowy”,
+   * a stan nie wie, że system zwolnił pamięć workera — więc „ponowne
+   * wczytanie” było pustym wywołaniem i każde kolejne zapytanie trafiało
+   * w ten sam pusty worker.
+   *
+   * Najpierw próbujemy udokumentowanej drogi WebLLM (`reload()` po utracie
+   * urządzenia). Gdy worker jest uszkodzony na tyle, że i to zawodzi,
+   * tworzymy od zera nowy worker i nowy silnik.
+   */
+  async recover(): Promise<void> {
+    const modelId = this.state.loadedModelId ?? this.state.modelId;
+
+    this.setState({
+      status: 'loading',
+      loadedModelId: null,
+      progress: 0,
+      progressText: 'Ponowne wczytywanie modelu…',
+      error: null,
+    });
+
+    const initProgressCallback = (report: InitProgressReport): void => {
+      this.setState({
+        progress: clamp01(report.progress),
+        progressText: translateProgress(report.text),
+      });
+    };
+
+    try {
+      const webllm = await this.loadLibrary();
+
+      let reloaded = false;
+      if (this.engine !== null) {
+        try {
+          this.engine.setInitProgressCallback(initProgressCallback);
+          await this.engine.reload(modelId);
+          reloaded = true;
+        } catch {
+          // Worker nie odpowiada poprawnie — przechodzimy do twardego restartu.
+        }
+      }
+
+      if (!reloaded) {
+        this.worker?.terminate();
+        this.worker = null;
+        this.engine = null;
+        this.engine = await webllm.CreateWebWorkerMLCEngine(this.ensureWorker(), modelId, {
+          initProgressCallback,
+        });
+      }
+
+      this.setState({
+        status: 'ready',
+        loadedModelId: modelId,
+        progress: 1,
+        progressText: 'Model gotowy',
+        error: null,
+      });
+    } catch (error) {
+      const message = explainLoadError(errorMessage(error), this.state.profile);
+      this.setState({ status: 'error', error: message, loadedModelId: null, progressText: '' });
+      throw new Error(message);
+    }
+  }
+
   /** Zwalnia pamięć GPU (model zostaje w cache dysku). */
   async unload(): Promise<void> {
     if (this.engine !== null) {

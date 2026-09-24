@@ -7,6 +7,7 @@ const generateJson = vi.fn<() => Promise<string>>();
 const interrupt = vi.fn<() => void>();
 const unload = vi.fn<() => Promise<void>>();
 const load = vi.fn<() => Promise<void>>();
+const recover = vi.fn<() => Promise<void>>();
 const engineProfile = { isMobile: false };
 
 vi.mock('@/lib/db', async (importOriginal) => ({
@@ -22,6 +23,7 @@ vi.mock('./engine', () => ({
     interrupt: () => interrupt(),
     unload: () => unload(),
     load: () => load(),
+    recover: () => recover(),
     getState: () => ({ profile: engineProfile }),
   },
 }));
@@ -58,6 +60,7 @@ describe('generateFromDocument', () => {
     addCardsToDeck.mockImplementation((_deckId, drafts) => Promise.resolve(drafts.length));
     unload.mockResolvedValue();
     load.mockResolvedValue();
+    recover.mockResolvedValue();
     engineProfile.isMobile = false;
     updateDocumentSummary.mockResolvedValue();
   });
@@ -227,7 +230,9 @@ describe('generateFromDocument', () => {
       regenerateSummary: true,
     });
 
-    expect(load).toHaveBeenCalledTimes(1);
+    // recover(), nie load() — load() uznałby, że model wciąż jest gotowy.
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(load).not.toHaveBeenCalled();
     expect(result.modelReloads).toBe(1);
     expect(result.cardsAdded).toBeGreaterThan(0);
     // To nie jest awaria krytyczna — przebieg trwa dalej.
@@ -250,7 +255,7 @@ describe('generateFromDocument', () => {
     // Jedna próba wczytania modelu na fragment, nigdy więcej niż limit.
     expect(result.modelReloads).toBeGreaterThan(0);
     expect(result.modelReloads).toBeLessThanOrEqual(3);
-    expect(load).toHaveBeenCalledTimes(result.modelReloads);
+    expect(recover).toHaveBeenCalledTimes(result.modelReloads);
     expect(result.cardsAdded).toBe(0);
     expect(result.failedChunks).toBeGreaterThan(0);
   });
