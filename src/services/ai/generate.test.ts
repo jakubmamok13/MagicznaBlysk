@@ -7,7 +7,7 @@ const generateJson = vi.fn<() => Promise<string>>();
 const interrupt = vi.fn<() => void>();
 const unload = vi.fn<() => Promise<void>>();
 const load = vi.fn<() => Promise<void>>();
-const recover = vi.fn<() => Promise<void>>();
+const recover = vi.fn<(options?: { hard?: boolean }) => Promise<void>>();
 const engineProfile = { isMobile: false };
 
 vi.mock('@/lib/db', async (importOriginal) => ({
@@ -23,7 +23,7 @@ vi.mock('./engine', () => ({
     interrupt: () => interrupt(),
     unload: () => unload(),
     load: () => load(),
-    recover: () => recover(),
+    recover: (options?: { hard?: boolean }) => recover(options),
     getState: () => ({ profile: engineProfile }),
   },
 }));
@@ -237,6 +237,47 @@ describe('generateFromDocument', () => {
     expect(result.cardsAdded).toBeGreaterThan(0);
     // To nie jest awaria krytyczna — przebieg trwa dalej.
     expect(result.fatalError).toBeNull();
+  });
+
+  it('„Object has already been disposed” odzyskuje twardym restartem workera', async () => {
+    // Dokładny komunikat z raportu użytkownika (iPhone, build 2feb0fe).
+    generateJson
+      .mockRejectedValueOnce(new Error('Error: The current Object has already been disposed.'))
+      .mockResolvedValue(
+        response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
+      );
+
+    const result = await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: true,
+    });
+
+    expect(recover).toHaveBeenCalledWith({ hard: true });
+    expect(result.modelReloads).toBe(1);
+    expect(result.cardsAdded).toBeGreaterThan(0);
+    expect(result.fatalError).toBeNull();
+  });
+
+  it('raport końcowy podaje faktycznie przetworzone fragmenty, nie wszystkie', async () => {
+    // Materiał na wiele fragmentów; trzy błędy pod rząd zatrzymują przebieg.
+    const long = { ...DOCUMENT, rawContent: Array.from({ length: 8 }, () => PARAGRAPH_A).join('\n\n') };
+    generateJson.mockRejectedValue(new Error('Niepoprawny JSON'));
+    const phases: { chunkNumber: number; chunkCount: number }[] = [];
+
+    const result = await generateFromDocument({
+      document: long,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: false,
+      onProgress: (p) => { if (p.phase === 'done' || p.phase === 'saving') phases.push(p); },
+    });
+
+    expect(result.chunkCount).toBeGreaterThan(3);
+    expect(phases.at(-1)?.chunkNumber).toBe(3);
   });
 
   it('przy uporczywym ubijaniu workera nie zapętla się', async () => {

@@ -297,7 +297,7 @@ class LLMEngineService {
    * urządzenia). Gdy worker jest uszkodzony na tyle, że i to zawodzi,
    * tworzymy od zera nowy worker i nowy silnik.
    */
-  async recover(): Promise<void> {
+  async recover(options: { hard?: boolean } = {}): Promise<void> {
     const modelId = this.state.loadedModelId ?? this.state.modelId;
 
     this.setState({
@@ -319,7 +319,8 @@ class LLMEngineService {
       const webllm = await this.loadLibrary();
 
       let reloaded = false;
-      if (this.engine !== null) {
+      // Przy twardym restarcie nie ufamy staremu workerowi w ogóle.
+      if (this.engine !== null && options.hard !== true) {
         try {
           this.engine.setInitProgressCallback(initProgressCallback);
           await this.engine.reload(modelId);

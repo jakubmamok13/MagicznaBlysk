@@ -222,10 +222,17 @@ gdy jest z czego go policzyć. Na bieżąco widać też kilka ostatnio utworzony
 
 Na telefonie przy napiętej pamięci system potrafi zabić Web Workera, w którym
 działa model — ekran mignie, strona wraca, a obiekt silnika w JS żyje dalej, tyle
-że bez modelu. Każde kolejne zapytanie kończy się wtedy `ModelNotLoadedError`.
+że bez modelu. Objawia się to jednym z dwóch komunikatów:
+
+- `ModelNotLoadedError` — worker nie ma modelu; wystarcza ponowne wczytanie,
+- `The current Object has already been disposed` — runtime TVM sięga po zwolnione
+  obiekty GPU, stan workera jest skażony; potrzebny jest **nowy worker**.
 
 To błąd **odwracalny**, więc potok nie przerywa pracy: odzyskuje model przez
 `llmEngine.recover()` (maksymalnie trzy razy w przebiegu) i powtarza ten sam fragment.
+
+Przy „disposed” (albo gdy miękkie przeładowanie już raz nie pomogło) `recover({ hard: true })`
+od razu kończy stary worker i tworzy nowy, bez prób ratowania skażonego stanu.
 
 `recover()` celowo omija `load()`: ten wychodzi od razu, gdy stan silnika mówi
 „gotowy” — a stan nie wie, że system zwolnił pamięć workera. Najpierw próbujemy
@@ -510,7 +517,7 @@ i jak włączyć akcelerację.
 ## Testy i jakość kodu
 
 ```bash
-npm run test     # 119 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
+npm run test     # 126 testów: SM-2, parser luk, chunking, weryfikacja cytatów, potok generowania
 npm run lint     # ESLint (reguły typowane, zakaz `any`)
 npm run build    # tsc -b + build produkcyjny
 ```

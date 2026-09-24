@@ -1,3 +1,5 @@
+import { cleanDisplayName } from '@/lib/utils';
+
 /** Rozpoznawanie formatów plików przyjmowanych przez import materiałów. */
 
 export type SupportedFormat = 'text' | 'markdown' | 'pdf' | 'docx';
@@ -40,7 +42,8 @@ export const FORMAT_LABELS: Record<SupportedFormat, string> = {
 /** Nazwa pliku bez rozszerzenia — domyślny tytuł materiału. */
 export function titleFromFileName(fileName: string): string {
   const withoutExtension = fileName.replace(/\.(txt|md|markdown|pdf|docx)$/i, '');
-  return withoutExtension.replace(/[_-]+/g, ' ').trim() || 'Materiał bez tytułu';
+  const cleaned = cleanDisplayName(withoutExtension.replace(/[_-]+/g, ' '));
+  return cleaned || 'Materiał bez tytułu';
 }
 
 /** Stary format .doc nie jest obsługiwany — warto powiedzieć to wprost. */

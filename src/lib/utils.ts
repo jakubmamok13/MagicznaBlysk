@@ -66,3 +66,34 @@ export function errorMessage(error: unknown): string {
     return 'Nieznany błąd';
   }
 }
+
+/** Maksymalna długość tytułu materiału wyświetlanego w interfejsie. */
+const MAX_DISPLAY_NAME = 80;
+
+/**
+ * Porządkuje nazwę do wyświetlenia.
+ *
+ * iOS zapisuje fragment tekstu do Plików pod nazwą wziętą z treści, zakodowaną
+ * procentowo i w postaci NFD (np. `notatke%CC%A8` zamiast „notatkę”), często
+ * z przełamaniami wierszy. Dekodujemy, normalizujemy do NFC, zwijamy białe znaki
+ * i przycinamy do rozsądnej długości.
+ */
+export function cleanDisplayName(raw: string): string {
+  let value = raw;
+
+  if (/%[0-9a-f]{2}/i.test(value)) {
+    try {
+      value = decodeURIComponent(value);
+    } catch {
+      // Nazwa ucięta w środku sekwencji (np. „…%2”) — dekodujemy tyle, ile się da.
+      try {
+        value = decodeURIComponent(value.replace(/%[0-9a-f]?$/i, ''));
+      } catch {
+        // Zostawiamy oryginał — lepsza brzydka nazwa niż wyjątek.
+      }
+    }
+  }
+
+  value = value.normalize('NFC').replace(/\s+/g, ' ').trim();
+  return value.length > MAX_DISPLAY_NAME ? truncate(value, MAX_DISPLAY_NAME) : value;
+}

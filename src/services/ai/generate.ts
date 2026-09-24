@@ -143,7 +143,20 @@ const MAX_MODEL_RELOADS = 3;
  * `ModelNotLoadedError`. To błąd ODWRACALNY: wystarczy wczytać model ponownie.
  */
 function isModelUnloadedError(message: string): boolean {
-  return /modelnotloadederror|model not loaded|reload\(model\)/i.test(message);
+  return (
+    /modelnotloadederror|model not loaded|reload\(model\)/i.test(message) ||
+    isDisposedError(message)
+  );
+}
+
+/**
+ * „The current Object has already been disposed” — runtime TVM w workerze
+ * sięga po obiekty GPU, które zostały już zwolnione (typowe po utracie
+ * urządzenia na telefonie). Stan workera jest wtedy niespójny, więc zwykły
+ * reload() nie wystarczy — potrzebny jest świeży worker.
+ */
+function isDisposedError(message: string): boolean {
+  return /already been disposed|been disposed|object.{0,20}disposed/i.test(message);
 }
 
 /**
@@ -219,6 +232,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   let unverifiedExcerpts = 0;
   let retriedChunks = 0;
   let modelReloads = 0;
+  let processedChunks = 0;
   let debugSample: string | null = null;
   const cardsOnlySchema = buildCardsOnlySchema(allowedTypes);
 
@@ -250,7 +264,9 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
       });
 
       // `recover()`, nie `load()` — ten drugi uznałby, że model wciąż jest gotowy.
-      await llmEngine.recover();
+      // Twardy restart (nowy worker), gdy stan workera jest skażony albo gdy
+      // miękkie przeładowanie już raz nie pomogło.
+      await llmEngine.recover({ hard: isDisposedError(message) || modelReloads > 1 });
       return llmEngine.generateJson(request);
     }
   };
@@ -273,6 +289,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
 
       const chunkNumber = chunk.index + 1;
       const chunkStartedAt = Date.now();
+      processedChunks = chunkNumber;
       report({
         phase: 'generating',
         chunkNumber,
@@ -418,7 +435,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
 
   report({
     phase: 'saving',
-    chunkNumber: chunks.length,
+    chunkNumber: processedChunks,
     chunkCount: chunks.length,
     cardsGenerated: cardsAdded,
     message: 'Zapisywanie kompendium…',
@@ -436,7 +453,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
 
   report({
     phase: cancelled ? 'cancelled' : 'done',
-    chunkNumber: chunks.length,
+    chunkNumber: processedChunks,
     chunkCount: chunks.length,
     cardsGenerated: cardsAdded,
     message: cancelled ? 'Przerwano — zapisano dotychczasowe fiszki.' : 'Gotowe.',

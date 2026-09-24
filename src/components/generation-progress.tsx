@@ -1,6 +1,7 @@
 import { Check, ClipboardCopy, Loader2, Sparkles, Square, X } from 'lucide-react';
 
 import { CardTypeBadge } from '@/components/card-type-badge';
+import { useEngine } from '@/hooks/use-engine';
 import { BUILD_ID, BUILD_TIME, copyToClipboard } from '@/lib/build-info';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
@@ -96,6 +97,7 @@ export function CardPreview({ job }: { job: GenerationJob }): React.JSX.Element 
 
 /** Pełny widok postępu — używany w oknie generowania. */
 export function GenerationProgressPanel({ job }: { job: GenerationJob }): React.JSX.Element {
+  const engine = useEngine();
   const percent = jobPercent(job);
   const eta = formatEta(job.etaMs);
   const finishedEmpty = job.status !== 'running' && job.cardsAdded === 0;
@@ -105,6 +107,11 @@ export function GenerationProgressPanel({ job }: { job: GenerationJob }): React.
     await copyToClipboard(
       [
         `CognitiveDeck build ${BUILD_ID} (${BUILD_TIME})`,
+        `Model: ${engine.loadedModelId ?? engine.modelId} · stan: ${engine.status}`,
+        `Urządzenie: ${engine.profile.isMobile ? 'mobilne' : 'komputer'} · shader-f16: ${
+          engine.profile.supportsF16 === undefined ? '?' : engine.profile.supportsF16 ? 'tak' : 'nie'
+        } · pamięć: ${engine.profile.memoryGb ?? '?'} GB`,
+        `UA: ${navigator.userAgent}`,
         `Materiał: ${job.documentTitle}`,
         `Fragmenty: ${job.chunkNumber}/${job.chunkCount} · powtórki: ${job.retriedChunks}`,
         `Fiszki: dodano ${job.cardsAdded}, model zwrócił ${job.returned}`,

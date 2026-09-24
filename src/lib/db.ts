@@ -1,5 +1,7 @@
 import Dexie, { type EntityTable } from 'dexie';
 
+import { cleanDisplayName } from './utils';
+
 /* -------------------------------------------------------------------------- */
 /*                                   Modele                                   */
 /* -------------------------------------------------------------------------- */
@@ -101,6 +103,32 @@ export class CognitiveDeckDatabase extends Dexie {
       cards: '++id, deckId, dueDate, type, createdAt, [deckId+dueDate]',
       studySessions: '++id, deckId, isActive, updatedAt',
     });
+
+    /**
+     * v2: te same indeksy, jednorazowe porządki w nazwach. Materiały zaimportowane
+     * z iOS miały tytuły zakodowane procentowo („notatke%CC%A8…”) — dekodujemy je.
+     */
+    this.version(2)
+      .stores({
+        documents: '++id, title, createdAt',
+        decks: '++id, documentId, createdAt',
+        cards: '++id, deckId, dueDate, type, createdAt, [deckId+dueDate]',
+        studySessions: '++id, deckId, isActive, updatedAt',
+      })
+      .upgrade(async (transaction) => {
+        await transaction
+          .table<StudyDocument, number>('documents')
+          .toCollection()
+          .modify((document) => {
+            document.title = cleanDisplayName(document.title) || 'Materiał bez tytułu';
+          });
+        await transaction
+          .table<Deck, number>('decks')
+          .toCollection()
+          .modify((deck) => {
+            deck.name = cleanDisplayName(deck.name) || 'Talia bez nazwy';
+          });
+      });
   }
 }
 

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { detectFormat, titleFromFileName, unsupportedReason } from './formats';
+import { cleanDisplayName } from '@/lib/utils';
 import { htmlToMarkdown } from './html-to-markdown';
 import {
   installMapUpsert,
@@ -38,6 +39,26 @@ describe('titleFromFileName', () => {
   it('usuwa rozszerzenie i porządkuje separatory', () => {
     expect(titleFromFileName('fizjologia_uklad-krazenia.pdf')).toBe('fizjologia uklad krazenia');
     expect(titleFromFileName('.txt')).toBe('Materiał bez tytułu');
+  });
+});
+
+describe('cleanDisplayName i tytuły z iOS', () => {
+  it('dekoduje nazwę zakodowaną procentowo w postaci NFD (przypadek z raportu)', () => {
+    const raw = 'Przygotuj%20notatke%CC%A8%20z%20tego%20materia%C5%82u:%20%E2%80%9E%0A%0A1.%20Katalog%2';
+    expect(cleanDisplayName(raw)).toBe('Przygotuj notatkę z tego materiału: „ 1. Katalog');
+  });
+
+  it('tytuł z nazwy pliku jest czytelny', () => {
+    expect(titleFromFileName('Notatki%20z%20prawa%20cywilnego.txt')).toBe('Notatki z prawa cywilnego');
+  });
+
+  it('nie rusza zwykłych nazw i przycina bardzo długie', () => {
+    expect(cleanDisplayName('Prawo cywilne — wykład 3')).toBe('Prawo cywilne — wykład 3');
+    expect(cleanDisplayName('a'.repeat(200)).length).toBeLessThanOrEqual(80);
+  });
+
+  it('nie wywraca się na zepsutej sekwencji', () => {
+    expect(() => cleanDisplayName('100%zgodne')).not.toThrow();
   });
 });
 

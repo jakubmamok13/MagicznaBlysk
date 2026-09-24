@@ -94,6 +94,19 @@ describe('llmEngine.recover', () => {
     expect(engine.getState().status).toBe('ready');
   });
 
+  it('twardy restart pomija reload() i zawsze tworzy nowy worker', async () => {
+    const engine = await freshEngine();
+    await engine.load();
+
+    await engine.recover({ hard: true });
+
+    // Po „disposed” stan workera jest skażony — nie próbujemy go ratować.
+    expect(reload).not.toHaveBeenCalled();
+    expect(terminated).toContain(1);
+    expect(createEngine).toHaveBeenCalledTimes(2);
+    expect(engine.getState().status).toBe('ready');
+  });
+
   it('w trakcie odzyskiwania stan nie udaje, że model jest gotowy', async () => {
     const engine = await freshEngine();
     await engine.load();
