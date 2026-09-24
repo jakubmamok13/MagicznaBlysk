@@ -294,7 +294,10 @@ export function describeEngineCrash(reason: string, cardsAdded: number): string 
       ? `Fiszki utworzone do tej pory (${cardsAdded}) są zapisane.`
       : 'Nie zdążyła powstać żadna fiszka.';
 
-  if (/device lost|webgpu|adapter|destroyed/i.test(reason)) {
+  if (/odmawia pracy/i.test(reason)) {
+    return `${reason}. ${saved} Ten telefon nie utrzymuje modelu w pamięci GPU — wygeneruj fiszki na komputerze i przenieś je przez Ustawienia → Eksportuj dane / Importuj kopię. Nauka na telefonie działa normalnie.`;
+  }
+  if (/device lost|webgpu|adapter|destroyed|map ?async|operationerror/i.test(reason)) {
     return `Sterownik GPU przerwał pracę modelu. ${saved} Wybierz mniejszy model w Ustawieniach, zamknij inne karty i spróbuj ponownie.`;
   }
   if (/out of memory|\boom\b|allocation/i.test(reason)) {

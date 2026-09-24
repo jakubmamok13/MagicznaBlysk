@@ -1,4 +1,5 @@
 import type {
+  ChatCompletion,
   ChatCompletionMessageParam,
   InitProgressReport,
   MLCEngineInterface,
@@ -18,6 +19,14 @@ import {
   type DeviceProfile,
 } from '@/lib/models';
 import { errorMessage } from '@/lib/utils';
+
+import {
+  GPU_EVENTS_CHANNEL,
+  describeGpuEvent,
+  isGpuEvent,
+  isGpuFailure,
+} from './gpu-events';
+import { EngineRuntimeError } from './errors';
 
 /**
  * Bibliotekę WebLLM (≈6 MB) ładujemy dynamicznie — dzięki temu panel, nauka
@@ -69,7 +78,15 @@ export interface EngineState {
    * i został automatycznie podmieniony na zgodny.
    */
   autoSwitchedFrom: string | null;
+  /**
+   * Ostatnie awarie GPU zgłoszone przez worker (utrata urządzenia, brak
+   * pamięci) — najnowsza na końcu. Trafiają do raportu z generowania.
+   */
+  gpuEvents: string[];
 }
+
+/** Ile ostatnich zdarzeń GPU trzymamy w stanie. */
+const MAX_GPU_EVENTS = 4;
 
 const INITIAL_STATE: EngineState = {
   status: 'unchecked',
@@ -83,7 +100,9 @@ const INITIAL_STATE: EngineState = {
   busy: false,
   profile: { supportsF16: undefined, isMobile: false, memoryGb: undefined },
   autoSwitchedFrom: null,
+  gpuEvents: [],
 };
+
 
 export interface GenerateJsonOptions {
   messages: ChatCompletionMessageParam[];
@@ -110,6 +129,18 @@ class LLMEngineService {
   private loadPromise: Promise<void> | null = null;
   private library: WebLLMModule | null = null;
   private libraryPromise: Promise<WebLLMModule> | null = null;
+  private gpuChannel: BroadcastChannel | null = null;
+
+  /** Nasłuch zdarzeń GPU z workera (patrz llm.worker.ts). */
+  private listenForGpuEvents(): void {
+    if (this.gpuChannel !== null || typeof BroadcastChannel === 'undefined') return;
+    this.gpuChannel = new BroadcastChannel(GPU_EVENTS_CHANNEL);
+    this.gpuChannel.onmessage = (event: MessageEvent<unknown>): void => {
+      if (!isGpuEvent(event.data) || !isGpuFailure(event.data)) return;
+      const entry = `${new Date(event.data.at).toLocaleTimeString('pl-PL')} ${describeGpuEvent(event.data)}`;
+      this.setState({ gpuEvents: [...this.state.gpuEvents, entry].slice(-MAX_GPU_EVENTS) });
+    };
+  }
 
   /** Ładuje (raz) bibliotekę WebLLM na żądanie. */
   private async loadLibrary(): Promise<WebLLMModule> {
@@ -277,6 +308,7 @@ class LLMEngineService {
 
   private ensureWorker(): Worker {
     if (this.worker === null) {
+      this.listenForGpuEvents();
       // Klasyczny worker (format IIFE z konfiguracji Vite) — patrz vite.config.ts.
       this.worker = new Worker(new URL('../../workers/llm.worker.ts', import.meta.url), {
         name: 'cognitivedeck-llm',
@@ -400,13 +432,18 @@ class LLMEngineService {
 
     this.setState({ busy: true });
     try {
-      const completion = await this.engine.chat.completions.create({
-        messages: options.messages,
-        response_format: { type: 'json_object', schema: options.schema },
-        temperature: options.temperature ?? 0.3,
-        max_tokens: options.maxTokens ?? 1800,
-        stream: false,
-      });
+      let completion: ChatCompletion;
+      try {
+        completion = await this.engine.chat.completions.create({
+          messages: options.messages,
+          response_format: { type: 'json_object', schema: options.schema },
+          temperature: options.temperature ?? 0.3,
+          max_tokens: options.maxTokens ?? 1800,
+          stream: false,
+        });
+      } catch (error) {
+        throw new EngineRuntimeError(errorMessage(error));
+      }
 
       const content = completion.choices[0]?.message.content;
       if (typeof content !== 'string' || content.trim().length === 0) {

@@ -135,7 +135,7 @@ export async function extractFromFile(
   onProgress?.(1, 'Gotowe');
   return {
     fileName: file.name,
-    title: titleFromFileName(file.name),
+    title: titleFromFileName(file.name, cleaned),
     format,
     text: cleaned,
     warnings,

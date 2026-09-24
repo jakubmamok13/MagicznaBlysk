@@ -9,6 +9,7 @@ import { chunkText } from '@/lib/text';
 import { errorMessage } from '@/lib/utils';
 
 import { llmEngine } from './engine';
+import { EngineRuntimeError, GpuExhaustedError } from './errors';
 import { buildChunkPrompt, buildRetryPrompt, SYSTEM_PROMPT } from './prompt';
 import {
   buildCardsOnlySchema,
@@ -133,8 +134,11 @@ function outputTokenBudget(cardsPerChunk: number): number {
 /** Po tylu błędach pod rząd przerywamy — coś jest nie tak systemowo. */
 const MAX_CONSECUTIVE_FAILURES = 3;
 
-/** Ile razy wolno wczytać model ponownie po ubiciu workera przez system. */
+/** Ile razy pod rząd (bez udanego fragmentu) wolno odtworzyć silnik. */
 const MAX_MODEL_RELOADS = 3;
+
+/** Twardy sufit odtworzeń na cały przebieg — żeby nie drenować baterii. */
+const MAX_TOTAL_MODEL_RELOADS = 12;
 
 /**
  * Worker z modelem bywa ubijany przez system (na telefonie to codzienność przy
@@ -143,20 +147,28 @@ const MAX_MODEL_RELOADS = 3;
  * `ModelNotLoadedError`. To błąd ODWRACALNY: wystarczy wczytać model ponownie.
  */
 function isModelUnloadedError(message: string): boolean {
-  return (
-    /modelnotloadederror|model not loaded|reload\(model\)/i.test(message) ||
-    isDisposedError(message)
+  return /modelnotloadederror|model not loaded|reload\(model\)|nie jest wczytany|already been disposed|been disposed/i.test(
+    message,
   );
 }
 
+/** Za długi prompt — ten sam fragment zawiedzie po każdym przeładowaniu. */
+function isPromptTooLongError(message: string): boolean {
+  return /context window|context_window|exceed/i.test(message);
+}
+
 /**
- * „The current Object has already been disposed” — runtime TVM w workerze
- * sięga po obiekty GPU, które zostały już zwolnione (typowe po utracie
- * urządzenia na telefonie). Stan workera jest wtedy niespójny, więc zwykły
- * reload() nie wystarczy — potrzebny jest świeży worker.
+ * Czy po tym błędzie warto odtworzyć silnik. Utrata urządzenia GPU na telefonie
+ * przychodzi pod wieloma komunikatami („map async was not successful”,
+ * „already been disposed”, ModelNotLoadedError…), więc nie zgadujemy po
+ * treści: każdy błąd rzucony przez sam silnik w trakcie generowania jest
+ * sygnałem do odtworzenia — poza deterministycznym przepełnieniem kontekstu.
  */
-function isDisposedError(message: string): boolean {
-  return /already been disposed|been disposed|object.{0,20}disposed/i.test(message);
+export function isRecoverableEngineError(error: unknown): boolean {
+  if (error instanceof GpuExhaustedError) return false;
+  const message = errorMessage(error);
+  if (isPromptTooLongError(message)) return false;
+  return error instanceof EngineRuntimeError || isModelUnloadedError(message);
 }
 
 /**
@@ -167,7 +179,7 @@ function isDisposedError(message: string): boolean {
 export function isFatalEngineError(message: string): boolean {
   // Ubity worker nie jest awarią krytyczną — model da się wczytać ponownie.
   if (isModelUnloadedError(message)) return false;
-  return /device lost|out of memory|\boom\b|context window|exceed|webgpu|adapter|destroyed|detached|aborted\(\)|unreachable/i.test(
+  return /device lost|out of memory|\boom\b|context window|exceed|webgpu|adapter|destroyed|detached|aborted\(\)|unreachable|map ?async|operationerror/i.test(
     message,
   );
 }
@@ -232,9 +244,15 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   let unverifiedExcerpts = 0;
   let retriedChunks = 0;
   let modelReloads = 0;
+  /** Odtworzenia od ostatniego udanego fragmentu. */
+  let reloadsInARow = 0;
   let processedChunks = 0;
   let debugSample: string | null = null;
   const cardsOnlySchema = buildCardsOnlySchema(allowedTypes);
+
+  // Czytamy flagę przez funkcję — inaczej analiza przepływu TS „zamraża”
+  // wartość `aborted` z pierwszego sprawdzenia w pętli.
+  const isAborted = (): boolean => signal?.aborted === true;
 
   /**
    * Zapytanie do modelu z samoregeneracją: gdy system ubije workera, wczytujemy
@@ -248,33 +266,32 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
     try {
       return await llmEngine.generateJson(request);
     } catch (error) {
-      const message = errorMessage(error);
-      if (!isModelUnloadedError(message) || modelReloads >= MAX_MODEL_RELOADS) throw error;
+      if (isAborted() || !isRecoverableEngineError(error)) throw error;
+      if (reloadsInARow >= MAX_MODEL_RELOADS || modelReloads >= MAX_TOTAL_MODEL_RELOADS) {
+        throw new GpuExhaustedError(errorMessage(error), modelReloads);
+      }
 
       modelReloads += 1;
+      reloadsInARow += 1;
       report({
         phase: 'loading-model',
         chunkNumber,
         chunkCount,
         cardsGenerated: cardsAdded,
-        message: `System zwolnił pamięć modelu — wczytuję go ponownie (${modelReloads}/${MAX_MODEL_RELOADS})…`,
+        message: `System zwolnił pamięć modelu — wczytuję go ponownie (${reloadsInARow}/${MAX_MODEL_RELOADS})…`,
         newCards: [],
         elapsedMs: Date.now() - startedAt,
         etaMs: null,
       });
 
       // `recover()`, nie `load()` — ten drugi uznałby, że model wciąż jest gotowy.
-      // Twardy restart (nowy worker), gdy stan workera jest skażony albo gdy
-      // miękkie przeładowanie już raz nie pomogło.
-      await llmEngine.recover({ hard: isDisposedError(message) || modelReloads > 1 });
+      // Zawsze twardo (nowy worker = nowe urządzenie GPU): po utracie urządzenia
+      // stan starego workera jest niespójny i reload() w nim bywa zawodny.
+      await llmEngine.recover({ hard: true });
       return llmEngine.generateJson(request);
     }
   };
   const rejections: RejectionStats = { incomplete: 0, duplicate: 0, ungrounded: 0 };
-
-  // Czytamy flagę przez funkcję — inaczej analiza przepływu TS „zamraża”
-  // wartość `aborted` z pierwszego sprawdzenia w pętli.
-  const isAborted = (): boolean => signal?.aborted === true;
 
   // Przerwanie generowania: zatrzymujemy dekodowanie w workerze od razu.
   const onAbort = (): void => llmEngine.interrupt();
@@ -393,6 +410,7 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
         const addedNow = await addCardsToDeck(deckId, parsed.cards);
         cardsAdded += addedNow;
         consecutiveFailures = 0;
+        reloadsInARow = 0;
 
         // Oddech między fragmentami — bez tego telefon łatwiej ubija workera.
         if (chunkNumber < chunks.length) await pause(CHUNK_BREATHER_MS);
@@ -416,10 +434,14 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
 
         const message = errorMessage(error);
         failedChunks += 1;
-        consecutiveFailures += 1;
         console.warn(`[CognitiveDeck] Fragment ${chunkNumber} nie został przetworzony: ${message}`);
 
-        if (isFatalEngineError(message)) {
+        // Utratę GPU liczy limit odtworzeń silnika (askModel), a nie licznik
+        // błędów pod rząd — inaczej ten drugi ucinałby próby, zanim się skończą.
+        if (isRecoverableEngineError(error)) continue;
+        consecutiveFailures += 1;
+
+        if (error instanceof GpuExhaustedError || isFatalEngineError(message)) {
           fatalError = message;
           break;
         }

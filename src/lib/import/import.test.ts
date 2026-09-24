@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest';
 import { detectFormat, titleFromFileName, unsupportedReason } from './formats';
-import { cleanDisplayName } from '@/lib/utils';
+import { cleanDisplayName, looksMachineGenerated, titleFromText } from '@/lib/utils';
 import { htmlToMarkdown } from './html-to-markdown';
 import {
   installMapUpsert,
@@ -39,6 +39,35 @@ describe('titleFromFileName', () => {
   it('usuwa rozszerzenie i porządkuje separatory', () => {
     expect(titleFromFileName('fizjologia_uklad-krazenia.pdf')).toBe('fizjologia uklad krazenia');
     expect(titleFromFileName('.txt')).toBe('Materiał bez tytułu');
+  });
+});
+
+describe('systemowe nazwy plików', () => {
+  it('załącznik z Poczty na iPhonie dostaje tytuł z treści (przypadek z raportu)', () => {
+    const text = '# Układ krążenia\n\nSerce pompuje krew do tętnic.';
+    expect(titleFromFileName('att.KD7RUw3Mjo8W3hVlYmx-GxjLmVHPGZeaXPpbeGxbXbY.txt', text)).toBe(
+      'Układ krążenia',
+    );
+  });
+
+  it('rozpoznaje identyfikatory, a nie ludzkie nazwy', () => {
+    expect(looksMachineGenerated('att.KD7RUw3Mjo8W3hVlYmx GxjLmVHPGZeaXPpbeGxbXbY')).toBe(true);
+    expect(looksMachineGenerated('3f2a9c1e-77b0-4c1d-9a6e-0c5f1b2d3e4f')).toBe(true);
+    expect(looksMachineGenerated('Wyklad_biologia_2024')).toBe(false);
+    expect(looksMachineGenerated('Prawo cywilne — wykład 3')).toBe(false);
+    expect(looksMachineGenerated('Farmakologia2024')).toBe(false);
+  });
+
+  it('bez treści zostaje przy nazwie pliku', () => {
+    expect(titleFromFileName('att.KD7RUw3Mjo8W3hVlYmx.pdf')).toBe('att.KD7RUw3Mjo8W3hVlYmx');
+  });
+
+  it('pomija numerację i przycina długą pierwszą linię', () => {
+    expect(titleFromText('\n\n1. Katalog zasad współżycia społecznego')).toBe(
+      'Katalog zasad współżycia społecznego',
+    );
+    expect(titleFromText('x'.repeat(10) + ' ' + 'słowo '.repeat(30)).length).toBeLessThanOrEqual(60);
+    expect(titleFromText('--- 123 ---')).toBe('');
   });
 });
 

@@ -11,6 +11,7 @@ const reload = vi.fn<(modelId: string) => Promise<void>>();
 const setInitProgressCallback = vi.fn<(cb: unknown) => void>();
 const createEngine = vi.fn<(...args: unknown[]) => void>();
 const terminated: number[] = [];
+const createCompletion = vi.fn<() => Promise<unknown>>();
 
 const fakeEngine = {
   reload: (modelId: string) => reload(modelId),
@@ -18,7 +19,7 @@ const fakeEngine = {
   unload: () => Promise.resolve(),
   interruptGenerate: () => undefined,
   runtimeStatsText: () => Promise.resolve(''),
-  chat: { completions: { create: () => Promise.resolve({ choices: [] }) } },
+  chat: { completions: { create: () => createCompletion() } },
 };
 
 vi.mock('@mlc-ai/web-llm', () => ({
@@ -118,5 +119,61 @@ describe('llmEngine.recover', () => {
 
     expect(seen[0]).toBe('loading');
     expect(seen.at(-1)).toBe('ready');
+  });
+});
+
+describe('llmEngine — błędy w trakcie generowania', () => {
+  beforeEach(() => {
+    createCompletion.mockReset();
+    workerCount = 0;
+  });
+
+  it('błąd silnika jest opakowany w EngineRuntimeError (sygnał do odtworzenia)', async () => {
+    const engine = await freshEngine();
+    const { EngineRuntimeError } = await import('./errors');
+    await engine.load();
+    createCompletion.mockRejectedValue(new Error('OperationError: map async was not successful'));
+
+    const failure = await engine
+      .generateJson({ messages: [], schema: '{}' })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(EngineRuntimeError);
+    expect((failure as Error).message).toMatch(/map async/);
+    expect(engine.getState().busy).toBe(false);
+  });
+
+  it('pusta odpowiedź NIE jest błędem silnika (nie odtwarzamy go bez potrzeby)', async () => {
+    const engine = await freshEngine();
+    const { EngineRuntimeError } = await import('./errors');
+    await engine.load();
+    createCompletion.mockResolvedValue({ choices: [{ message: { content: '' } }] });
+
+    const failure = await engine
+      .generateJson({ messages: [], schema: '{}' })
+      .catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).not.toBeInstanceOf(EngineRuntimeError);
+  });
+
+  it('zbiera zgłoszenia utraty GPU z workera, pomijając własne zwolnienia', async () => {
+    const engine = await freshEngine();
+    const { GPU_EVENTS_CHANNEL } = await import('./gpu-events');
+    await engine.load();
+
+    const sender = new BroadcastChannel(GPU_EVENTS_CHANNEL);
+    sender.postMessage({ kind: 'lost', reason: 'destroyed', message: '', at: Date.now() });
+    sender.postMessage({ kind: 'lost', reason: 'unknown', message: 'GPU process was killed', at: Date.now() });
+    sender.postMessage({ kind: 'error', reason: 'GPUOutOfMemoryError', message: 'Out of memory', at: Date.now() });
+    sender.postMessage('śmieci');
+    await vi.waitFor(() => {
+      expect(engine.getState().gpuEvents).toHaveLength(2);
+    });
+    sender.close();
+
+    const [lost, oom] = engine.getState().gpuEvents;
+    expect(lost).toMatch(/utrata urządzenia \(unknown\): GPU process was killed/);
+    expect(oom).toMatch(/GPUOutOfMemoryError: Out of memory/);
   });
 });

@@ -1,4 +1,4 @@
-import { cleanDisplayName } from '@/lib/utils';
+import { cleanDisplayName, looksMachineGenerated, titleFromText } from '@/lib/utils';
 
 /** Rozpoznawanie formatów plików przyjmowanych przez import materiałów. */
 
@@ -40,8 +40,12 @@ export const FORMAT_LABELS: Record<SupportedFormat, string> = {
 };
 
 /** Nazwa pliku bez rozszerzenia — domyślny tytuł materiału. */
-export function titleFromFileName(fileName: string): string {
+export function titleFromFileName(fileName: string, text = ''): string {
   const withoutExtension = fileName.replace(/\.(txt|md|markdown|pdf|docx)$/i, '');
+  if (looksMachineGenerated(withoutExtension)) {
+    const fromText = titleFromText(text);
+    if (fromText !== '') return fromText;
+  }
   const cleaned = cleanDisplayName(withoutExtension.replace(/[_-]+/g, ' '));
   return cleaned || 'Materiał bez tytułu';
 }

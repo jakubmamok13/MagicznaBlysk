@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DraftCard, StudyDocument } from '@/lib/db';
+import { EngineRuntimeError } from './errors';
 
 const addCardsToDeck = vi.fn<(deckId: number, drafts: DraftCard[]) => Promise<number>>();
 const updateDocumentSummary = vi.fn<(documentId: number, summary: string) => Promise<void>>();
@@ -259,6 +260,96 @@ describe('generateFromDocument', () => {
     expect(result.modelReloads).toBe(1);
     expect(result.cardsAdded).toBeGreaterThan(0);
     expect(result.fatalError).toBeNull();
+  });
+
+  it('„map async was not successful” (utrata GPU) odtwarza silnik i kontynuuje', async () => {
+    // Dokładny komunikat z raportu użytkownika (iPhone, build ce7aa10, model 0.5B).
+    // Silnik opakowuje każdy swój błąd w EngineRuntimeError — nie zgadujemy po treści.
+    generateJson
+      .mockRejectedValueOnce(new EngineRuntimeError('OperationError: map async was not successful'))
+      .mockResolvedValue(
+        response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
+      );
+
+    const result = await generateFromDocument({
+      document: DOCUMENT,
+      deckId: 3,
+      allowedTypes: ['basic'],
+      cardsPerChunk: 1,
+      regenerateSummary: true,
+    });
+
+    expect(recover).toHaveBeenCalledWith({ hard: true });
+    expect(result.modelReloads).toBe(1);
+    expect(result.cardsAdded).toBeGreaterThan(0);
+    expect(result.fatalError).toBeNull();
+  });
+
+  it('nieznany dotąd błąd silnika też uruchamia odtworzenie', async () => {
+    generateJson
+      .mockRejectedValueOnce(new EngineRuntimeError('Jakiś zupełnie nowy komunikat WebKit'))
+      .mockResolvedValue(
+        response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
+      );
+
+    const result = await generateFromDocument({
+      document: DOCUMENT, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: true,
+    });
+
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(result.cardsAdded).toBeGreaterThan(0);
+  });
+
+  it('uporczywa utrata GPU: wykorzystuje wszystkie odtworzenia, potem kończy jasnym błędem', async () => {
+    // Materiał na wiele fragmentów — jak 47 fragmentów z raportu.
+    const long = { ...DOCUMENT, rawContent: Array.from({ length: 10 }, () => PARAGRAPH_A).join('\n\n') };
+    generateJson.mockRejectedValue(new EngineRuntimeError('OperationError: map async was not successful'));
+
+    const result = await generateFromDocument({
+      document: long, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
+    });
+
+    // Wcześniej licznik „3 błędy pod rząd” ucinał próby przed odtworzeniem silnika.
+    expect(recover).toHaveBeenCalledTimes(3);
+    expect(result.modelReloads).toBe(3);
+    expect(result.fatalError).toMatch(/odmawia pracy/);
+    expect(result.fatalError).toMatch(/map async/);
+    // Przerywa od razu po wyczerpaniu limitu, nie mieli wszystkich fragmentów.
+    expect(result.failedChunks).toBeLessThan(result.chunkCount);
+    expect(generateJson.mock.calls.length).toBeLessThanOrEqual(7);
+    expect(unload).toHaveBeenCalled();
+  });
+
+  it('gdy GPU ginie przy każdym fragmencie, ale odtworzenie pomaga — nie przerywa po 3', async () => {
+    const long = { ...DOCUMENT, rawContent: Array.from({ length: 10 }, () => PARAGRAPH_A).join('\n\n') };
+    let call = 0;
+    generateJson.mockImplementation(() => {
+      call += 1;
+      // Każde pierwsze podejście do fragmentu kończy się utratą GPU, powtórka działa.
+      return call % 2 === 1
+        ? Promise.reject(new EngineRuntimeError('OperationError: map async was not successful'))
+        : Promise.resolve(response('### A', `Pytanie ${call}?`, 'Mitochondria wytwarzają ATP'));
+    });
+
+    const result = await generateFromDocument({
+      document: long, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
+    });
+
+    expect(result.chunkCount).toBeGreaterThan(3);
+    expect(result.modelReloads).toBe(result.chunkCount);
+    expect(result.fatalError).toBeNull();
+    expect(result.failedChunks).toBe(0);
+  });
+
+  it('przepełnienie kontekstu nie uruchamia bezcelowego odtwarzania', async () => {
+    generateJson.mockRejectedValue(new EngineRuntimeError('Prompt tokens exceed context window size'));
+
+    const result = await generateFromDocument({
+      document: DOCUMENT, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
+    });
+
+    expect(recover).not.toHaveBeenCalled();
+    expect(result.fatalError).toMatch(/context window/);
   });
 
   it('raport końcowy podaje faktycznie przetworzone fragmenty, nie wszystkie', async () => {

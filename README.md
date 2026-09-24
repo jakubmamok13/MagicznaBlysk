@@ -218,28 +218,37 @@ analiza materiału → tworzenie fiszek (3/8) → zapis kompendium*. Czas do ko�
 liczymy ze średniej z już przetworzonych fragmentów i pokazujemy dopiero wtedy,
 gdy jest z czego go policzyć. Na bieżąco widać też kilka ostatnio utworzonych fiszek.
 
-### Gdy system ubije workera z modelem
+### Gdy system odbierze modelowi GPU
 
-Na telefonie przy napiętej pamięci system potrafi zabić Web Workera, w którym
-działa model — ekran mignie, strona wraca, a obiekt silnika w JS żyje dalej, tyle
-że bez modelu. Objawia się to jednym z dwóch komunikatów:
+Na telefonie przy napiętej pamięci system potrafi odebrać przeglądarce urządzenie
+GPU albo zabić Web Workera z modelem — ekran mignie, strona wraca, a obiekt
+silnika w JS żyje dalej, tyle że bez modelu. To jedno zdarzenie przychodzi pod
+wieloma komunikatami, np.:
 
-- `ModelNotLoadedError` — worker nie ma modelu; wystarcza ponowne wczytanie,
-- `The current Object has already been disposed` — runtime TVM sięga po zwolnione
-  obiekty GPU, stan workera jest skażony; potrzebny jest **nowy worker**.
+- `ModelNotLoadedError` — worker nie ma już modelu,
+- `The current Object has already been disposed` — runtime TVM sięga po zwolnione obiekty GPU,
+- `OperationError: map async was not successful` — odczyt wyniku z GPU po utracie urządzenia.
 
-To błąd **odwracalny**, więc potok nie przerywa pracy: odzyskuje model przez
-`llmEngine.recover()` (maksymalnie trzy razy w przebiegu) i powtarza ten sam fragment.
+Dlatego nie dopasowujemy konkretnych treści: `generateJson()` opakowuje **każdy** błąd
+rzucony przez silnik w `EngineRuntimeError`, a potok traktuje go jako sygnał do
+odtworzenia — z wyjątkiem przepełnienia okna kontekstu, które powtórzyłoby się
+deterministycznie. Pusta czy niepoprawna odpowiedź modelu nie jest błędem silnika.
 
-Przy „disposed” (albo gdy miękkie przeładowanie już raz nie pomogło) `recover({ hard: true })`
-od razu kończy stary worker i tworzy nowy, bez prób ratowania skażonego stanu.
+Odtworzenie to zawsze `llmEngine.recover({ hard: true })`: stary worker jest kończony,
+powstaje nowy (a z nim nowe urządzenie GPU), po czym ten sam fragment jest powtarzany.
+Limit to **3 odtworzenia pod rząd bez udanego fragmentu** (i 12 na cały przebieg) — gdy
+odtworzenie pomaga, generowanie idzie dalej choćby przy każdym fragmencie. Po wyczerpaniu
+limitu przebieg kończy się od razu komunikatem, że GPU odmawia pracy, zamiast mielić
+kolejne fragmenty.
 
 `recover()` celowo omija `load()`: ten wychodzi od razu, gdy stan silnika mówi
-„gotowy” — a stan nie wie, że system zwolnił pamięć workera. Najpierw próbujemy
-udokumentowanej drogi WebLLM (`reload()` po utracie urządzenia), a gdy worker nie
-odpowiada, tworzymy od zera nowy worker i nowy silnik. Dopiero
-uporczywe powtarzanie się tej sytuacji kończy przebieg — z komunikatem mówiącym
-wprost, że na tym urządzeniu brakuje pamięci.
+„gotowy” — a stan nie wie, że system zwolnił pamięć workera.
+
+WebLLM zapisuje przyczynę utraty urządzenia wyłącznie do konsoli workera, której na
+telefonie nie widać. Worker (`src/workers/llm.worker.ts`) podpina się więc pod każde
+tworzone urządzenie GPU i przekazuje `device.lost` oraz nieprzechwycone błędy WebGPU
+kanałem `BroadcastChannel` do wątku głównego. Ostatnie z nich trafiają do raportu
+(**Kopiuj raport** → „Zdarzenia GPU”); własne zwolnienia urządzenia (`destroyed`) są pomijane.
 
 Dodatkowo, gdy wykryjemy urządzenie mobilne:
 

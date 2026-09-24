@@ -97,3 +97,28 @@ export function cleanDisplayName(raw: string): string {
   value = value.normalize('NFC').replace(/\s+/g, ' ').trim();
   return value.length > MAX_DISPLAY_NAME ? truncate(value, MAX_DISPLAY_NAME) : value;
 }
+
+/**
+ * Nazwy nadawane przez system, a nie przez człowieka — np. załącznik z Poczty
+ * na iPhonie („att.KD7RUw3Mjo8W3hVlYmx-GxjLm…”) albo UUID. Rozpoznajemy je po
+ * długim „słowie” mieszającym litery i cyfry, którego nikt nie wpisuje ręcznie.
+ */
+export function looksMachineGenerated(name: string): boolean {
+  if (/^att\./i.test(name)) return true;
+  return name
+    .split(/[\s._-]+/)
+    // „Farmakologia2024” to ludzka nazwa; „KD7RUw3Mjo8W” — już nie: litery
+    // i cyfry przeplatają się wielokrotnie.
+    .some((token) => token.length >= 12 && (token.match(/\d\p{L}|\p{L}\d/gu) ?? []).length >= 3);
+}
+
+/** Pierwsza sensowna linia treści jako tytuł (gdy nazwa pliku nic nie mówi). */
+export function titleFromText(text: string): string {
+  const line = text
+    .split('\n')
+    .map((candidate) => candidate.replace(/^[#>*\-\s\d.)]+/, '').trim())
+    .find((candidate) => /\p{L}{3}/u.test(candidate));
+  if (line === undefined) return '';
+  const cleaned = cleanDisplayName(line);
+  return cleaned.length > 60 ? `${cleaned.slice(0, 59).trimEnd()}…` : cleaned;
+}

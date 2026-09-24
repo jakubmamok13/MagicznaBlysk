@@ -1,6 +1,6 @@
 import Dexie, { type EntityTable } from 'dexie';
 
-import { cleanDisplayName } from './utils';
+import { cleanDisplayName, looksMachineGenerated, titleFromText } from './utils';
 
 /* -------------------------------------------------------------------------- */
 /*                                   Modele                                   */
@@ -127,6 +127,40 @@ export class CognitiveDeckDatabase extends Dexie {
           .toCollection()
           .modify((deck) => {
             deck.name = cleanDisplayName(deck.name) || 'Talia bez nazwy';
+          });
+      });
+
+    /**
+     * v3: materiały z systemową nazwą pliku (załącznik z Poczty na iPhonie:
+     * „att.KD7RUw3Mjo8W…”) dostają tytuł z pierwszej linii treści. Talia z taką
+     * samą nazwą zmienia się razem z materiałem.
+     */
+    this.version(3)
+      .stores({
+        documents: '++id, title, createdAt',
+        decks: '++id, documentId, createdAt',
+        cards: '++id, deckId, dueDate, type, createdAt, [deckId+dueDate]',
+        studySessions: '++id, deckId, isActive, updatedAt',
+      })
+      .upgrade(async (transaction) => {
+        const renamed = new Map<number, { from: string; to: string }>();
+        await transaction
+          .table<StudyDocument, number>('documents')
+          .toCollection()
+          .modify((document) => {
+            if (!looksMachineGenerated(document.title)) return;
+            const title = titleFromText(document.rawContent);
+            if (title === '') return;
+            renamed.set(document.id, { from: document.title, to: title });
+            document.title = title;
+          });
+        if (renamed.size === 0) return;
+        await transaction
+          .table<Deck, number>('decks')
+          .toCollection()
+          .modify((deck) => {
+            const change = renamed.get(deck.documentId);
+            if (change !== undefined && deck.name === change.from) deck.name = change.to;
           });
       });
   }
