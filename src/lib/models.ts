@@ -44,6 +44,16 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
     description: 'Szybki kompromis — dobrze radzi sobie z polskim i strukturą JSON.',
   },
   {
+    id: 'gemma3-1b-it-q4f16_1-MLC',
+    label: 'Gemma 3 1B',
+    downloadSize: '~0,7 GB',
+    vramMb: 711,
+    precision: 'f16',
+    description:
+      'Najmniej pamięci GPU ze wszystkich (711 MB) i dobra znajomość polskiego — pierwszy wybór na iPhone’a.',
+    mobileFriendly: true,
+  },
+  {
     id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
     label: 'Llama 3.2 1B Instruct',
     downloadSize: '~0,7 GB',
@@ -58,7 +68,8 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
     downloadSize: '~0,5 GB',
     vramMb: 945,
     precision: 'f16',
-    description: 'Najmniejszy sensowny model — ostatnia deska ratunku na telefonie.',
+    description:
+      'Mimo najmniejszej liczby parametrów potrzebuje więcej pamięci GPU niż Gemma 3 1B i Llama 1B (ogromny słownik).',
     mobileFriendly: true,
   },
 

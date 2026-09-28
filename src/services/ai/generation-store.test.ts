@@ -62,6 +62,9 @@ const RESULT = {
   chunkCount: 4,
   cancelled: false,
   summary: '# Kompendium',
+  truncatedResponses: 0,
+  modelReloads: 0,
+  debugSample: null,
 };
 
 const START = {
@@ -177,6 +180,28 @@ describe('generationStore', () => {
     expect(job.error).toMatch(/mniejszy model/i);
   });
 
+  it('po awarii raport ma prawdziwe liczby (odtworzenia, próbka), a nie zera', async () => {
+    // Wcześniej ścieżka awarii nie kopiowała tych pól — raport z iPhone'a
+    // pokazywał „odtworzenia: 0, brak próbki” niezależnie od przebiegu.
+    generateFromDocument.mockResolvedValue({
+      ...RESULT,
+      cardsAdded: 0,
+      returned: 0,
+      failedChunks: 1,
+      modelReloads: 2,
+      debugSample: '[fragment 1] map async was not successful',
+      fatalError: 'Urządzenie GPU odmawia pracy — silnik odtworzono 2 razy',
+    });
+
+    await generationStore.start(START);
+    const job = generationStore.getState();
+
+    expect(job.status).toBe('error');
+    expect(job.modelReloads).toBe(2);
+    expect(job.failedChunks).toBe(1);
+    expect(job.debugSample).toContain('map async');
+  });
+
   it('błąd zapisuje komunikat zamiast wywracać aplikację', async () => {
     generateFromDocument.mockRejectedValue(new Error('brak pamięci GPU'));
     await generationStore.start(START);
@@ -225,15 +250,10 @@ describe('describeOutcome', () => {
   };
 
   it('po wielokrotnym ubiciu modelu mówi wprost o braku pamięci', () => {
-    const note = describeOutcome({ ...base, modelReloads: 3 });
+    const note = describeOutcome({ ...base, modelReloads: 2 });
     expect(note).toMatch(/zabrakło pamięci/i);
-    expect(note).toMatch(/0\.5B|komputerze/);
-  });
-
-  it('po nieudanych powtórkach podpowiada większy model', () => {
-    const note = describeOutcome({ ...base, retriedChunks: 15 });
-    expect(note).toMatch(/powtórce/);
-    expect(note).toMatch(/3B|większy/);
+    expect(note).toMatch(/Gemma 3 1B/);
+    expect(note).toMatch(/komputerze/);
   });
 
   it('tłumaczy wynik „zero fiszek”, gdy model nic nie zwrócił', () => {

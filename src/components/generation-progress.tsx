@@ -1,8 +1,9 @@
 import { Check, ClipboardCopy, Loader2, Sparkles, Square, X } from 'lucide-react';
+import { useState } from 'react';
 
 import { CardTypeBadge } from '@/components/card-type-badge';
 import { useEngine } from '@/hooks/use-engine';
-import { BUILD_ID, BUILD_TIME, copyToClipboard } from '@/lib/build-info';
+import { copyToClipboard } from '@/lib/build-info';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { maskCloze } from '@/lib/cloze';
@@ -14,6 +15,7 @@ import {
   type GenerationJob,
 } from '@/services/ai/generation-store';
 import { GENERATION_PHASES, PHASE_LABELS, type GenerationPhase } from '@/services/ai/generate';
+import { buildGenerationReport } from '@/services/ai/report';
 
 function phaseState(
   job: GenerationJob,
@@ -95,36 +97,34 @@ export function CardPreview({ job }: { job: GenerationJob }): React.JSX.Element 
   );
 }
 
+/** Przycisk kopiowania raportu z krótkim potwierdzeniem. */
+function CopyReportButton({ job, className }: { job: GenerationJob; className?: string }): React.JSX.Element {
+  const engine = useEngine();
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      className={cn('h-7 text-xs', className)}
+      onClick={() => {
+        void copyToClipboard(buildGenerationReport(job, engine)).then((ok) => {
+          setCopied(ok);
+          if (ok) setTimeout(() => setCopied(false), 2000);
+        });
+      }}
+    >
+      {copied ? <Check className="size-3" /> : <ClipboardCopy className="size-3" />}
+      {copied ? 'Skopiowano' : 'Kopiuj raport'}
+    </Button>
+  );
+}
+
 /** Pełny widok postępu — używany w oknie generowania. */
 export function GenerationProgressPanel({ job }: { job: GenerationJob }): React.JSX.Element {
-  const engine = useEngine();
   const percent = jobPercent(job);
   const eta = formatEta(job.etaMs);
-  const finishedEmpty = job.status !== 'running' && job.cardsAdded === 0;
-
-  /** Raport do wklejenia w zgłoszeniu — z surową odpowiedzią modelu. */
-  const copyReport = async (): Promise<void> => {
-    await copyToClipboard(
-      [
-        `CognitiveDeck build ${BUILD_ID} (${BUILD_TIME})`,
-        `Model: ${engine.loadedModelId ?? engine.modelId} · stan: ${engine.status}`,
-        `Urządzenie: ${engine.profile.isMobile ? 'mobilne' : 'komputer'} · shader-f16: ${
-          engine.profile.supportsF16 === undefined ? '?' : engine.profile.supportsF16 ? 'tak' : 'nie'
-        } · pamięć: ${engine.profile.memoryGb ?? '?'} GB`,
-        `UA: ${navigator.userAgent}`,
-        `Materiał: ${job.documentTitle}`,
-        `Fragmenty: ${job.chunkNumber}/${job.chunkCount} · powtórki: ${job.retriedChunks} · odtworzenia silnika: ${job.modelReloads}`,
-        `Zdarzenia GPU: ${engine.gpuEvents.length > 0 ? engine.gpuEvents.join(' | ') : 'brak'}`,
-        `Fiszki: dodano ${job.cardsAdded}, model zwrócił ${job.returned}`,
-        `Odrzucone: ${job.rejected} · nieudane fragmenty: ${job.failedChunks}`,
-        `Wynik: ${job.outcomeNote ?? job.message}`,
-        job.error !== null ? `Błąd: ${job.error}` : '',
-        '',
-        'Surowa odpowiedź modelu:',
-        job.debugSample ?? '(brak próbki)',
-      ].join('\n'),
-    );
-  };
+  // Raport przy każdym niepowodzeniu — także gdy nie udało się nawet wczytać modelu.
+  const showReport = job.status === 'error' || (job.status !== 'running' && job.cardsAdded === 0);
 
   return (
     <div className="space-y-3" aria-live="polite">
@@ -157,12 +157,7 @@ export function GenerationProgressPanel({ job }: { job: GenerationJob }): React.
         <p className="rounded-md bg-destructive/10 p-2.5 text-xs text-destructive">{job.error}</p>
       )}
 
-      {finishedEmpty && (
-        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => void copyReport()}>
-          <ClipboardCopy className="size-3" />
-          Kopiuj raport
-        </Button>
-      )}
+      {showReport && <CopyReportButton job={job} />}
 
       <CardPreview job={job} />
 
@@ -221,6 +216,9 @@ export function GenerationStrip({
             </span>
           </p>
           {job.status === 'running' && <Progress value={percent} className="mt-1 h-1" />}
+          {job.status === 'error' && job.error !== null && (
+            <p className="mt-0.5 line-clamp-2 text-xs text-destructive">{job.error}</p>
+          )}
         </div>
 
         <span className="hidden shrink-0 text-xs tabular-nums text-muted-foreground sm:inline">
@@ -240,6 +238,7 @@ export function GenerationStrip({
           </Button>
         ) : (
           <div className="flex shrink-0 gap-1">
+            {(job.status === 'error' || job.cardsAdded === 0) && <CopyReportButton job={job} />}
             {onOpen !== undefined && (
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={onOpen}>
                 Pokaż

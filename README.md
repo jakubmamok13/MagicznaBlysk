@@ -178,12 +178,12 @@ słabej jakości skanu.
 
 ## Potok AI
 
-1. **Podział materiału** (`lib/text.ts`) na fragmenty ≤ 2400 znaków, na granicach akapitów i zdań
+1. **Podział materiału** (`lib/text.ts`) na fragmenty ≤ 1800 znaków (na telefonie 1100), na granicach akapitów i zdań
    (z uwzględnieniem polskich skrótów typu `m.in.`), z zakładką między fragmentami.
 2. **Zapytanie do modelu** dla każdego fragmentu — prompt systemowy wymaga kompendium,
    atomowych fiszek i dosłownego cytatu przy każdej z nich.
-3. **Wymuszony JSON** — `response_format: { type: 'json_object', schema }`; dekoder WebLLM jest
-   ograniczony gramatyką schematu, więc odpowiedź nie może być „prawie JSON-em”.
+3. **Wymuszony format** — `response_format: { type: 'grammar' }` z gramatyką EBNF budowaną w
+   `services/ai/grammar.ts` (szczegóły niżej, w „Format odpowiedzi: własna gramatyka”).
 4. **Walidacja** (`services/ai/schema.ts`) — odrzucenie niekompletnych fiszek, naprawa składni luk
    (`{c1::x}` → `{{c1::x}}`), degradacja `cloze` bez luki do `basic`, deduplikacja awersów.
 5. **Weryfikacja cytatu** (`lib/text.ts`) — trzystopniowa:
@@ -218,87 +218,76 @@ analiza materiału → tworzenie fiszek (3/8) → zapis kompendium*. Czas do ko�
 liczymy ze średniej z już przetworzonych fragmentów i pokazujemy dopiero wtedy,
 gdy jest z czego go policzyć. Na bieżąco widać też kilka ostatnio utworzonych fiszek.
 
+### Format odpowiedzi: własna gramatyka zamiast schematu JSON
+
+Pierwsza wersja używała `response_format: { type: 'json_object', schema }`. W kodzie WebLLM
+widać jednak, że schemat jest kompilowany z **dowolną liczbą białych znaków** między
+elementami JSON (`anyWhitespace = true`, bez limitu). Małe modele potrafią wtedy „utknąć” na
+spacjach i nowych liniach aż do wyczerpania limitu tokenów — odpowiedź jest ucięta i nieczytelna.
+Schemat bez `minItems` pozwalał też na pustą listę fiszek, co łatano ponawianiem zapytań.
+
+`buildCardGrammar()` generuje gramatykę EBNF (xgrammar), która kontroluje wszystko:
+
+- JSON w formie kanonicznej, **bez swobodnych białych znaków**,
+- **od 1 do N fiszek** — pusta lista jest niemożliwa,
+- **fiszki przed kompendium** — gdy zabraknie tokenów, ucina się kompendium, nie fiszki.
+
+Długości pól celowo **nie** są ograniczane w gramatyce. Pomiar na prawdziwym xgrammar ze słownikiem
+Qwen (151 936 tokenów) pokazał, że zakres `char{0,700}` kosztuje ~836 ms na każdy token, a nawet
+proste `char*` ~85 ms — generowanie byłoby setki razy wolniejsze. Napisy mają więc tę samą postać,
+co w konwerterze schematów xgrammar (prawostronna rekurencja + lookahead `(=[,}])`): maski tokenów
+są wyliczane z góry, a narzut na całą odpowiedź to ~1–2 ms. Rozmiar odpowiedzi ogranicza budżet
+tokenów (`tokenBudget()`), a gdy odpowiedź zostanie ucięta (`finish_reason: "length"`),
+`salvageTruncated()` zachowuje wszystkie fiszki, które zdążyły się domknąć.
+
+`grammar.xgrammar.test.ts` sprawdza gramatykę na **prawdziwym** silniku xgrammar z WebLLM
+(WebAssembly, bez GPU): co przyjmuje, co odrzuca i ile kosztuje maska tokenów na krok.
+
 ### Gdy system odbierze modelowi GPU
 
-Na telefonie przy napiętej pamięci system potrafi odebrać przeglądarce urządzenie
-GPU albo zabić Web Workera z modelem — ekran mignie, strona wraca, a obiekt
-silnika w JS żyje dalej, tyle że bez modelu. To jedno zdarzenie przychodzi pod
-wieloma komunikatami, np.:
+Na telefonie przy napiętej pamięci system potrafi odebrać przeglądarce urządzenie GPU. To jedno
+zdarzenie przychodzi pod wieloma komunikatami (`ModelNotLoadedError`, `The current Object has
+already been disposed`, `OperationError: map async was not successful`), dlatego nie
+dopasowujemy treści: `generateJson()` opakowuje **każdy** błąd silnika w `EngineRuntimeError`.
+Wyjątek to błędy deterministyczne (gramatyka, przepełnienie kontekstu) — przeładowanie niczego
+by nie zmieniło.
 
-- `ModelNotLoadedError` — worker nie ma już modelu,
-- `The current Object has already been disposed` — runtime TVM sięga po zwolnione obiekty GPU,
-- `OperationError: map async was not successful` — odczyt wyniku z GPU po utracie urządzenia.
+Odtworzenie (`llmEngine.recover({ hard: true })`) **najpierw zwalnia stary model** (`unload()`
+z limitem czasu, zakończenie workera, chwila na oddanie pamięci), a dopiero potem wczytuje
+nowy. Wcześniejsza wersja kończyła worker i od razu ładowała model od nowa — przez moment
+w pamięci były dwa modele, więc na telefonie „odzyskiwanie” samo wywoływało kolejną awarię.
 
-Dlatego nie dopasowujemy konkretnych treści: `generateJson()` opakowuje **każdy** błąd
-rzucony przez silnik w `EngineRuntimeError`, a potok traktuje go jako sygnał do
-odtworzenia — z wyjątkiem przepełnienia okna kontekstu, które powtórzyłoby się
-deterministycznie. Pusta czy niepoprawna odpowiedź modelu nie jest błędem silnika.
+Jedyny limit: **2 odtworzenia pod rząd** bez udanego fragmentu (licznik zeruje każdy sukces).
+Potem przebieg kończy się komunikatem, że urządzenie nie utrzymuje modelu. Nieudane ponowne
+wczytanie kończy przebieg od razu, z jego własnym komunikatem.
 
-Odtworzenie to zawsze `llmEngine.recover({ hard: true })`: stary worker jest kończony,
-powstaje nowy (a z nim nowe urządzenie GPU), po czym ten sam fragment jest powtarzany.
-Limit to **3 odtworzenia pod rząd bez udanego fragmentu** (i 12 na cały przebieg) — gdy
-odtworzenie pomaga, generowanie idzie dalej choćby przy każdym fragmencie. Po wyczerpaniu
-limitu przebieg kończy się od razu komunikatem, że GPU odmawia pracy, zamiast mielić
-kolejne fragmenty.
+WebLLM zapisuje przyczynę utraty urządzenia tylko do konsoli workera, której na telefonie nie
+widać. Worker (`src/workers/llm.worker.ts`) przekazuje więc `device.lost` i nieprzechwycone błędy
+WebGPU kanałem `BroadcastChannel`; trafiają do raportu jako „Zdarzenia GPU”.
 
-`recover()` celowo omija `load()`: ten wychodzi od razu, gdy stan silnika mówi
-„gotowy” — a stan nie wie, że system zwolnił pamięć workera.
+### Raport i diagnostyka
 
-WebLLM zapisuje przyczynę utraty urządzenia wyłącznie do konsoli workera, której na
-telefonie nie widać. Worker (`src/workers/llm.worker.ts`) podpina się więc pod każde
-tworzone urządzenie GPU i przekazuje `device.lost` oraz nieprzechwycone błędy WebGPU
-kanałem `BroadcastChannel` do wątku głównego. Ostatnie z nich trafiają do raportu
-(**Kopiuj raport** → „Zdarzenia GPU”); własne zwolnienia urządzenia (`destroyed`) są pomijane.
+**Kopiuj raport** jest dostępny przy każdym niepowodzeniu — w oknie generowania i na pasku
+w nagłówku — także wtedy, gdy nie udało się nawet wczytać modelu. Zawiera wersję aplikacji,
+model, urządzenie, etap, liczbę odtworzeń silnika, ucięte odpowiedzi, zdarzenia GPU, błąd
+i surową próbkę odpowiedzi modelu. Statystyki są kopiowane przy **każdym** zakończeniu
+zadania (wcześniej ścieżka awarii je gubiła i raport pokazywał zera).
 
-Dodatkowo, gdy wykryjemy urządzenie mobilne:
+### Pobieranie modelu
 
-- fragmenty mają 1100 zamiast 1800 znaków,
-- domyślna liczba fiszek z fragmentu to 2 zamiast 4,
-- między fragmentami jest krótka przerwa, żeby przeglądarka zdążyła zwolnić pamięć.
-
-### Gdy model zwraca pustą listę
-
-Gramatyka wymuszona przez `response_format` gwarantuje **kształt** odpowiedzi, ale nie jej
-treść: `{"summary":"…","cards":[]}` jest formalnie poprawne. Mniejsze modele potrafią wybrać
-tę drogę na skróty, zwłaszcza przy długiej, dwujęzycznej instrukcji.
-
-Dlatego fragment bez ani jednej fiszki jest **ponawiany raz** z prośbą uproszczoną do minimum:
-schemat bez kompendium (`buildCardsOnlySchema`) i krótki prompt wyłącznie po polsku
-(`buildRetryPrompt`). Jeśli i to nie pomoże, zapisujemy skróconą surową odpowiedź modelu —
-przycisk **Kopiuj raport** w oknie generowania pozwala ją przesłać w zgłoszeniu.
+Zerwane połączenie w trakcie pobierania wag (częste na komórce) jest wznawiane automatycznie
+(do 5 prób) — WebLLM trzyma pobrane części w cache, więc kolejna próba kontynuuje od miejsca
+przerwania. Rozpoznawane są komunikaty wszystkich przeglądarek (Chrome: „Failed to fetch”,
+Safari: „Load failed”, Firefox: „NetworkError”).
 
 ### Dlaczego powstało mniej fiszek, niż oczekiwano
 
-Wynik „dodano 0 fiszek” przy zielonym przebiegu to najgorsza możliwa informacja zwrotna,
-dlatego potok liczy odrzucenia z podziałem na przyczyny (niekompletne, powtórzenia, brak
-umocowania) i pokazuje je wprost — w oknie generowania i w powiadomieniu. Komunikat rozróżnia
-m.in. sytuacje: model nic nie zwrócił, model odpowiadał ale nie tworzył fiszek, wszystko było
-powtórzeniem już istniejących, walidacja odrzuciła wszystko.
+Potok liczy odrzucenia z podziałem na przyczyny (niekompletne, powtórzenia, brak umocowania)
+i pokazuje je wprost — w oknie generowania i w powiadomieniu.
 
-### Odporność na awarię modelu
-
-Model uruchomiony lokalnie potrafi paść — najczęściej przez brak pamięci GPU albo
-utratę urządzenia przez sterownik. Potok jest na to przygotowany:
-
-- fragmenty mają 1800 znaków, a budżet tokenów wyjścia dobierany jest do liczby
-  zamawianych fiszek: okno kontekstu modeli to 4096 tokenów, a polszczyzna
-  tokenizuje się gęściej niż angielski,
-- błąd, po którym silnik nie nadaje się do pracy (utrata GPU, brak pamięci,
-  przepełnienie kontekstu), **przerywa przebieg natychmiast** zamiast bezsensownie
-  mielić pozostałe fragmenty martwym silnikiem,
-- trzy błędy pod rząd też przerywają pracę — coś jest wtedy nie tak systemowo,
-- po awarii model jest zwalniany, więc kolejna próba startuje na czystym urządzeniu,
-- komunikat mówi wprost, ile fiszek ocalało i co zmienić (mniejszy model, mniej
-  fiszek z fragmentu).
-
-Ponowne uruchomienie generowania na tym samym materiale jest bezpieczne —
-duplikaty są odrzucane po treści awersu, więc praca sprzed awarii nie ginie
-ani się nie powiela.
-
-Fiszki zapisują się **po każdym fragmencie**, nie zbiorczo na końcu — pojawiają się
-od razu na liście materiału, a przerwanie albo awaria przeglądarki nie kasuje
-dotychczasowej pracy modelu.
-
+Ponowne uruchomienie generowania na tym samym materiale jest bezpieczne — duplikaty są odrzucane
+po treści awersu. Fiszki zapisują się **po każdym fragmencie**, więc przerwanie albo awaria nie
+kasuje dotychczasowej pracy modelu.
 
 ## Algorytm SM-2
 
@@ -357,8 +346,9 @@ i działa bez sieci.
 
 Model językowy na telefonie to najbardziej wymagający element:
 
-- w **Ustawieniach** wybierz **Llama 3.2 1B** (~0,7 GB) — pozostałe warianty zwykle nie mieszczą się
-  w limicie pamięci karty przeglądarki na urządzeniu mobilnym,
+- w **Ustawieniach** wybierz **Gemma 3 1B** — według danych WebLLM potrzebuje najmniej pamięci GPU
+  (711 MB). Uwaga: *Qwen 2.5 0.5B* mimo mniejszej liczby parametrów potrzebuje więcej (945 MB),
+  bo ma ogromny słownik,
 - iOS ma ostry limit pamięci na kartę — na większości iPhone'ów wczytanie modelu się nie powiedzie;
   realne szanse mają iPady z układami M oraz najnowsze modele iPhone,
 - Android wymaga Chrome 121+ z działającym WebGPU i kilku GB wolnego RAM-u.
@@ -502,14 +492,16 @@ Nie każdy układ graficzny obsługuje te same modele, dlatego lista w panelu je
 
 - **brak rozszerzenia `shader-f16`** (częste na starszych układach mobilnych) — pokazywane są
   wyłącznie warianty **(f32)**; modele f16 nie skompilowałyby się w ogóle,
-- **urządzenie mobilne** — pokazywane są tylko modele mieszczące się w limicie pamięci karty
-  przeglądarki (0.5B–1B),
+- **urządzenie mobilne** — pokazywane są tylko lekkie modele; domyślnie ten o najmniejszym
+  zapotrzebowaniu na pamięć GPU (Gemma 3 1B, 711 MB),
 - **zapamiętany model niezgodny z urządzeniem** jest automatycznie podmieniany na zgodny,
   z informacją w panelu,
 - błędy ładowania (`out of memory`, `device lost`, brak `shader-f16`) są tłumaczone na konkretną
   podpowiedź, co zrobić dalej.
 
-Na telefonie realnie działają modele 0.5B–1B. Jeżeli nawet one nie ruszają — dotyczy to zwłaszcza
+O zapotrzebowaniu na pamięć decyduje nie tylko liczba parametrów — Qwen 2.5 0.5B potrzebuje
+więcej pamięci GPU (945 MB) niż Gemma 3 1B (711 MB) czy Llama 3.2 1B (879 MB). Jeżeli nawet
+najlżejszy model nie rusza — dotyczy to zwłaszcza
 iPhone'ów, gdzie limit pamięci na kartę jest niski — wygeneruj fiszki na komputerze i przenieś je
 kopią zapasową (opisane w [Instalacji na telefonie](#instalacja-na-telefonie)).
 

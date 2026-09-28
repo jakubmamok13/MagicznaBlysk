@@ -12,14 +12,23 @@ const setInitProgressCallback = vi.fn<(cb: unknown) => void>();
 const createEngine = vi.fn<(...args: unknown[]) => void>();
 const terminated: number[] = [];
 const createCompletion = vi.fn<() => Promise<unknown>>();
+const createCompletionArgs: unknown[] = [];
+const unloadSpy = vi.fn<() => Promise<void>>();
 
 const fakeEngine = {
   reload: (modelId: string) => reload(modelId),
   setInitProgressCallback: (cb: unknown) => setInitProgressCallback(cb),
-  unload: () => Promise.resolve(),
+  unload: () => unloadSpy(),
   interruptGenerate: () => undefined,
   runtimeStatsText: () => Promise.resolve(''),
-  chat: { completions: { create: () => createCompletion() } },
+  chat: {
+    completions: {
+      create: (args: unknown) => {
+        createCompletionArgs.push(args);
+        return createCompletion();
+      },
+    },
+  },
 };
 
 vi.mock('@mlc-ai/web-llm', () => ({
@@ -45,6 +54,23 @@ class FakeWorker {
 }
 vi.stubGlobal('Worker', FakeWorker);
 
+/**
+ * Przesuwa sztuczny zegar, oddając między krokami prawdziwą turę pętli zdarzeń
+ * (dynamiczny import biblioteki kończy się poza sztucznymi timerami).
+ */
+async function settleWithFakeTimers(task: Promise<unknown>): Promise<void> {
+  let settled = false;
+  task.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  for (let step = 0; step < 100 && !settled; step += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+    await vi.advanceTimersByTimeAsync(500);
+  }
+  await task;
+}
+
 async function freshEngine(): Promise<typeof import('./engine')['llmEngine']> {
   vi.resetModules();
   return (await import('./engine')).llmEngine;
@@ -56,6 +82,8 @@ describe('llmEngine.recover', () => {
     reload.mockResolvedValue();
     setInitProgressCallback.mockReset();
     createEngine.mockReset();
+    unloadSpy.mockReset();
+    unloadSpy.mockResolvedValue();
     terminated.length = 0;
     workerCount = 0;
   });
@@ -125,6 +153,10 @@ describe('llmEngine.recover', () => {
 describe('llmEngine — błędy w trakcie generowania', () => {
   beforeEach(() => {
     createCompletion.mockReset();
+    createEngine.mockReset();
+    unloadSpy.mockReset();
+    unloadSpy.mockResolvedValue();
+    terminated.length = 0;
     workerCount = 0;
   });
 
@@ -135,7 +167,7 @@ describe('llmEngine — błędy w trakcie generowania', () => {
     createCompletion.mockRejectedValue(new Error('OperationError: map async was not successful'));
 
     const failure = await engine
-      .generateJson({ messages: [], schema: '{}' })
+      .generateJson({ messages: [], grammar: 'root ::= "{}"', maxTokens: 10 })
       .catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(EngineRuntimeError);
@@ -150,11 +182,74 @@ describe('llmEngine — błędy w trakcie generowania', () => {
     createCompletion.mockResolvedValue({ choices: [{ message: { content: '' } }] });
 
     const failure = await engine
-      .generateJson({ messages: [], schema: '{}' })
+      .generateJson({ messages: [], grammar: 'root ::= "{}"', maxTokens: 10 })
       .catch((error: unknown) => error);
 
     expect(failure).toBeInstanceOf(Error);
     expect(failure).not.toBeInstanceOf(EngineRuntimeError);
+  });
+
+  it('wysyła gramatykę EBNF i zwraca finish_reason (wykrywanie uciętych odpowiedzi)', async () => {
+    const engine = await freshEngine();
+    await engine.load();
+    createCompletion.mockResolvedValue({ choices: [{ message: { content: '{"cards":[' }, finish_reason: 'length' }] });
+
+    const result = await engine.generateJson({ messages: [], grammar: 'root ::= "x"', maxTokens: 10 });
+
+    expect(result).toEqual({ content: '{"cards":[', finishReason: 'length' });
+    expect(createCompletionArgs.at(-1)).toMatchObject({
+      response_format: { type: 'grammar', grammar: 'root ::= "x"' },
+      max_tokens: 10,
+    });
+  });
+
+  it('odtworzenie zwalnia stary model PRZED wczytaniem nowego (bez podwójnej pamięci)', async () => {
+    const engine = await freshEngine();
+    await engine.load();
+    const order: string[] = [];
+    unloadSpy.mockImplementation(() => {
+      order.push('unload');
+      return Promise.resolve();
+    });
+    createEngine.mockImplementation(() => order.push('create'));
+    const terminatedBefore = terminated.length;
+
+    await engine.recover({ hard: true });
+
+    expect(order).toEqual(['unload', 'create']);
+    expect(terminated.length).toBe(terminatedBefore + 1);
+  });
+
+  it('odtworzenie nie zawiesza się, gdy unload() starego silnika nie odpowiada', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const engine = await freshEngine();
+      await engine.load();
+      unloadSpy.mockImplementation(() => new Promise<void>(() => undefined));
+      const recovering = engine.recover({ hard: true });
+      await settleWithFakeTimers(recovering);
+      expect(engine.getState().status).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('zerwane pobieranie wag jest wznawiane automatycznie', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout'] });
+    try {
+      const engine = await freshEngine();
+      let calls = 0;
+      createEngine.mockImplementation(() => {
+        calls += 1;
+        if (calls < 3) throw new TypeError('Load failed');
+      });
+      const loading = engine.load();
+      await settleWithFakeTimers(loading);
+      expect(calls).toBe(3);
+      expect(engine.getState().status).toBe('ready');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('zbiera zgłoszenia utraty GPU z workera, pomijając własne zwolnienia', async () => {

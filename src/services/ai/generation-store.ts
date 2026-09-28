@@ -41,8 +41,8 @@ export interface GenerationJob {
   returned: number;
   /** Czytelne wyjaśnienie, dlaczego powstało mniej fiszek (albo zero). */
   outcomeNote: string | null;
-  /** Ile fragmentów wymagało powtórki. */
-  retriedChunks: number;
+  /** Odpowiedzi ucięte limitem tokenów (fiszki odzyskane). */
+  truncatedResponses: number;
   /** Ile razy model trzeba było wczytać ponownie po ubiciu workera. */
   modelReloads: number;
   /** Skrócona surowa odpowiedź modelu — do zgłoszenia problemu. */
@@ -76,7 +76,7 @@ const IDLE_JOB: GenerationJob = {
   failedChunks: 0,
   returned: 0,
   outcomeNote: null,
-  retriedChunks: 0,
+  truncatedResponses: 0,
   modelReloads: 0,
   debugSample: null,
 };
@@ -175,17 +175,28 @@ class GenerationStore {
         },
       });
 
+      // Statystyki zapisujemy w KAŻDYM zakończeniu — wcześniej ścieżka awarii
+      // ich nie kopiowała i raport pokazywał „odtworzenia: 0, brak próbki”
+      // akurat wtedy, gdy były najbardziej potrzebne.
+      const stats = {
+        cardsAdded: result.cardsAdded,
+        rejected: result.rejected,
+        correctedExcerpts: result.correctedExcerpts,
+        failedChunks: result.failedChunks,
+        returned: result.returned,
+        truncatedResponses: result.truncatedResponses,
+        modelReloads: result.modelReloads,
+        debugSample: result.debugSample,
+        etaMs: 0,
+      };
+
       if (result.fatalError !== null) {
         // Awaria silnika: fiszki sprzed awarii są już w bazie, mówimy to wprost
         // i podpowiadamy, co zmienić, zamiast zostawiać suchy komunikat błędu.
         this.setState({
+          ...stats,
           status: 'error',
           phase: 'cancelled',
-          cardsAdded: result.cardsAdded,
-          rejected: result.rejected,
-          correctedExcerpts: result.correctedExcerpts,
-          failedChunks: result.failedChunks,
-          etaMs: 0,
           error: describeEngineCrash(result.fatalError, result.cardsAdded),
           message: `Model przerwał pracę po ${result.cardsAdded} fiszkach.`,
         });
@@ -193,18 +204,10 @@ class GenerationStore {
       }
 
       this.setState({
+        ...stats,
         status: result.cancelled ? 'cancelled' : 'done',
         phase: result.cancelled ? 'cancelled' : 'done',
-        cardsAdded: result.cardsAdded,
-        rejected: result.rejected,
-        correctedExcerpts: result.correctedExcerpts,
-        failedChunks: result.failedChunks,
-        returned: result.returned,
-        retriedChunks: result.retriedChunks,
-        modelReloads: result.modelReloads,
-        debugSample: result.debugSample,
         outcomeNote: describeOutcome(result),
-        etaMs: 0,
         message: result.cancelled
           ? 'Przerwano — zapisano dotychczasowe fiszki.'
           : `Dodano ${result.cardsAdded} fiszek.`,
@@ -246,15 +249,11 @@ export function describeOutcome(result: {
   chunkCount: number;
   rejections: { incomplete: number; duplicate: number; ungrounded: number };
   unverifiedExcerpts: number;
-  retriedChunks?: number;
   modelReloads?: number;
 }): string | null {
   if (result.cardsAdded === 0) {
-    if ((result.modelReloads ?? 0) >= 3) {
-      return 'System raz po raz zwalniał pamięć modelu i przerywał jego pracę. Na tym urządzeniu zabrakło pamięci — wybierz najmniejszy model (0.5B), zamknij inne karty, albo wygeneruj fiszki na komputerze i przenieś je kopią zapasową.';
-    }
-    if ((result.retriedChunks ?? 0) > 0 && result.returned === 0) {
-      return `Model odpowiadał, ale nie utworzył ani jednej fiszki — nawet po uproszczonej powtórce (${result.retriedChunks} prób). To zwykle za mały model: wybierz w Ustawieniach większy (3B) albo zmniejsz liczbę fiszek z fragmentu. Skopiuj raport i prześlij go, jeśli problem wróci.`;
+    if ((result.modelReloads ?? 0) >= 2) {
+      return 'System raz po raz zwalniał pamięć modelu i przerywał jego pracę. Na tym urządzeniu zabrakło pamięci — wybierz model zużywający najmniej pamięci (Gemma 3 1B), zamknij inne karty, albo wygeneruj fiszki na komputerze i przenieś je kopią zapasową.';
     }
     if (result.returned === 0 && result.failedChunks >= result.chunkCount) {
       return 'Model nie zwrócił ani jednej fiszki — żaden fragment nie został przetworzony. Spróbuj innego modelu w Ustawieniach.';
@@ -301,7 +300,7 @@ export function describeEngineCrash(reason: string, cardsAdded: number): string 
     return `Sterownik GPU przerwał pracę modelu. ${saved} Wybierz mniejszy model w Ustawieniach, zamknij inne karty i spróbuj ponownie.`;
   }
   if (/out of memory|\boom\b|allocation/i.test(reason)) {
-    return `Zabrakło pamięci GPU. ${saved} Pomaga mniejszy model (0.5B–1B) oraz mniejsza liczba fiszek z jednego fragmentu.`;
+    return `Zabrakło pamięci GPU. ${saved} Pomaga lżejszy model (Gemma 3 1B) oraz mniejsza liczba fiszek z jednego fragmentu.`;
   }
   if (/context window|exceed/i.test(reason)) {
     return `Materiał przekroczył okno kontekstu modelu. ${saved} Zmniejsz liczbę fiszek z jednego fragmentu i spróbuj ponownie.`;

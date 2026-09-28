@@ -106,10 +106,16 @@ const INITIAL_STATE: EngineState = {
 
 export interface GenerateJsonOptions {
   messages: ChatCompletionMessageParam[];
-  /** Schemat JSON (string) wymuszany gramatyką dekodera. */
-  schema: string;
-  maxTokens?: number;
+  /** Gramatyka EBNF (xgrammar) wymuszająca dokładny format odpowiedzi. */
+  grammar: string;
+  maxTokens: number;
   temperature?: number;
+}
+
+export interface GenerateJsonResult {
+  content: string;
+  /** `length` — odpowiedź ucięta limitem tokenów. */
+  finishReason: string | null;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -276,13 +282,27 @@ class LLMEngineService {
         });
       };
 
-      if (this.engine === null) {
-        this.engine = await webllm.CreateWebWorkerMLCEngine(worker, modelId, {
-          initProgressCallback,
-        });
-      } else {
-        this.engine.setInitProgressCallback(initProgressCallback);
-        await this.engine.reload(modelId);
+      /**
+       * Zerwane połączenie w trakcie pobierania (częste na komórce) nie może
+       * przekreślać całego wczytywania: WebLLM trzyma już pobrane części wag
+       * w cache, więc kolejna próba po prostu kontynuuje od miejsca przerwania.
+       */
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          if (this.engine === null) {
+            this.engine = await webllm.CreateWebWorkerMLCEngine(worker, modelId, {
+              initProgressCallback,
+            });
+          } else {
+            this.engine.setInitProgressCallback(initProgressCallback);
+            await this.engine.reload(modelId);
+          }
+          break;
+        } catch (error) {
+          if (attempt >= DOWNLOAD_ATTEMPTS || !isNetworkError(errorMessage(error))) throw error;
+          this.setState({ progressText: `Połączenie przerwane — wznawiam pobieranie (próba ${attempt + 1}/${DOWNLOAD_ATTEMPTS})…` });
+          await delay(DOWNLOAD_RETRY_DELAY_MS * attempt);
+        }
       }
 
       markModelCached(modelId);
@@ -363,9 +383,7 @@ class LLMEngineService {
       }
 
       if (!reloaded) {
-        this.worker?.terminate();
-        this.worker = null;
-        this.engine = null;
+        await this.disposeWorker();
         this.engine = await webllm.CreateWebWorkerMLCEngine(this.ensureWorker(), modelId, {
           initProgressCallback,
         });
@@ -383,6 +401,25 @@ class LLMEngineService {
       this.setState({ status: 'error', error: message, loadedModelId: null, progressText: '' });
       throw new Error(message);
     }
+  }
+
+  /**
+   * Zwalnia stary worker ZANIM powstanie nowy. Samo `terminate()` oddaje pamięć
+   * GPU asynchronicznie, więc nowy model wczytywał się, gdy stary jeszcze ją
+   * zajmował — na telefonie podwójne zużycie pamięci kończyło się kolejną
+   * awarią i „odzyskiwanie” samo wywoływało to, przed czym miało chronić.
+   */
+  private async disposeWorker(): Promise<void> {
+    const engine = this.engine;
+    this.engine = null;
+    if (engine !== null) {
+      // Po utracie urządzenia unload() potrafi nie odpowiedzieć — nie czekamy w nieskończoność.
+      await Promise.race([engine.unload().catch(() => undefined), delay(WORKER_UNLOAD_TIMEOUT_MS)]);
+    }
+    this.worker?.terminate();
+    this.worker = null;
+    // Chwila dla przeglądarki na faktyczne zwolnienie pamięci zakończonego workera.
+    await delay(WORKER_RELEASE_PAUSE_MS);
   }
 
   /** Zwalnia pamięć GPU (model zostaje w cache dysku). */
@@ -422,10 +459,10 @@ class LLMEngineService {
   }
 
   /**
-   * Jedno zapytanie do modelu z wymuszonym schematem JSON.
+   * Jedno zapytanie do modelu z wymuszoną gramatyką.
    * Zwraca surowy tekst odpowiedzi — walidację wykonuje warstwa wyżej.
    */
-  async generateJson(options: GenerateJsonOptions): Promise<string> {
+  async generateJson(options: GenerateJsonOptions): Promise<GenerateJsonResult> {
     if (this.engine === null || this.state.status !== 'ready') {
       throw new Error('Model nie jest wczytany. Uruchom go w panelu, aby generować fiszki.');
     }
@@ -436,20 +473,21 @@ class LLMEngineService {
       try {
         completion = await this.engine.chat.completions.create({
           messages: options.messages,
-          response_format: { type: 'json_object', schema: options.schema },
+          response_format: { type: 'grammar', grammar: options.grammar },
           temperature: options.temperature ?? 0.3,
-          max_tokens: options.maxTokens ?? 1800,
+          max_tokens: options.maxTokens,
           stream: false,
         });
       } catch (error) {
         throw new EngineRuntimeError(errorMessage(error));
       }
 
-      const content = completion.choices[0]?.message.content;
+      const choice = completion.choices[0];
+      const content = choice?.message.content;
       if (typeof content !== 'string' || content.trim().length === 0) {
         throw new Error('Model zwrócił pustą odpowiedź.');
       }
-      return content;
+      return { content, finishReason: choice?.finish_reason ?? null };
     } finally {
       this.setState({ busy: false });
     }
@@ -486,11 +524,11 @@ export function explainLoadError(message: string, profile: DeviceProfile): strin
     lower.includes('allocation')
   ) {
     return profile.isMobile
-      ? `${message}\n\nNa telefonie zabrakło pamięci dla modelu. Wybierz mniejszy model (0.5B), zamknij inne karty i spróbuj ponownie. Część telefonów — zwłaszcza iPhone — ma limit pamięci zbyt niski nawet dla najmniejszych modeli; wtedy fiszki wygeneruj na komputerze i przenieś je kopią zapasową.`
+      ? `${message}\n\nNa telefonie zabrakło pamięci dla modelu. Wybierz model zużywający najmniej pamięci (Gemma 3 1B), zamknij inne karty i spróbuj ponownie. Część telefonów — zwłaszcza iPhone — ma limit pamięci zbyt niski nawet dla najmniejszych modeli; wtedy fiszki wygeneruj na komputerze i przenieś je kopią zapasową.`
       : `${message}\n\nZabrakło pamięci GPU. Wybierz mniejszy model albo zamknij inne aplikacje korzystające z karty graficznej.`;
   }
 
-  if (lower.includes('fetch') || lower.includes('network') || lower.includes('failed to load')) {
+  if (isNetworkError(message)) {
     return `${message}\n\nNie udało się pobrać wag modelu. Sprawdź połączenie z internetem — pierwsze uruchomienie wymaga pobrania pliku modelu.`;
   }
 
@@ -499,6 +537,25 @@ export function explainLoadError(message: string, profile: DeviceProfile): strin
 
 function readInitialModelId(): string {
   return typeof window === 'undefined' ? DEFAULT_MODEL_ID : loadPreferredModelId();
+}
+
+const WORKER_UNLOAD_TIMEOUT_MS = 3000;
+const DOWNLOAD_ATTEMPTS = 5;
+const DOWNLOAD_RETRY_DELAY_MS = 1500;
+
+/** Chrome: „Failed to fetch”, Firefox: „NetworkError…”, Safari: „Load failed”. */
+export function isNetworkError(message: string): boolean {
+  return /failed to fetch|networkerror|network error|load failed|failed to load|err_network|connection/i.test(
+    message,
+  );
+}
+
+const WORKER_RELEASE_PAUSE_MS = 500;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function clamp01(value: number): number {

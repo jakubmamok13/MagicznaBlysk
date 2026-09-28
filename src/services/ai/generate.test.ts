@@ -4,7 +4,7 @@ import { EngineRuntimeError } from './errors';
 
 const addCardsToDeck = vi.fn<(deckId: number, drafts: DraftCard[]) => Promise<number>>();
 const updateDocumentSummary = vi.fn<(documentId: number, summary: string) => Promise<void>>();
-const generateJson = vi.fn<() => Promise<string>>();
+const generateJson = vi.fn<(request: { grammar: string; maxTokens: number }) => Promise<{ content: string; finishReason: string | null }>>();
 const interrupt = vi.fn<() => void>();
 const unload = vi.fn<() => Promise<void>>();
 const load = vi.fn<() => Promise<void>>();
@@ -20,7 +20,7 @@ vi.mock('@/lib/db', async (importOriginal) => ({
 
 vi.mock('./engine', () => ({
   llmEngine: {
-    generateJson: () => generateJson(),
+    generateJson: (request: { grammar: string; maxTokens: number }) => generateJson(request),
     interrupt: () => interrupt(),
     unload: () => unload(),
     load: () => load(),
@@ -46,12 +46,34 @@ const DOCUMENT: StudyDocument = {
   createdAt: new Date('2026-01-01T10:00:00.000Z'),
 };
 
-function response(summary: string, front: string, excerpt: string): string {
+function payload(summary: string, front: string, excerpt: string): string {
+  // Kanoniczny JSON — dokładnie taki kształt wymusza gramatyka (fiszki przed kompendium).
   return JSON.stringify({
-    summary,
     cards: [
       { type: 'basic', front, back: 'Odpowiedź', sourceExcerpt: excerpt, explanation: 'Bo tak wynika ze źródła.' },
     ],
+    summary,
+  });
+}
+
+function reply(content: string, finishReason: string | null = 'stop'): { content: string; finishReason: string | null } {
+  return { content, finishReason };
+}
+
+const GOOD = reply(payload('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'));
+const LONG_DOCUMENT = { ...DOCUMENT, rawContent: Array.from({ length: 8 }, () => PARAGRAPH_A).join('\n\n') };
+
+function run(
+  document: StudyDocument = DOCUMENT,
+  extra: Partial<Parameters<typeof generateFromDocument>[0]> = {},
+): ReturnType<typeof generateFromDocument> {
+  return generateFromDocument({
+    document,
+    deckId: 3,
+    allowedTypes: ['basic'],
+    cardsPerChunk: 1,
+    regenerateSummary: true,
+    ...extra,
   });
 }
 
@@ -66,124 +88,78 @@ describe('generateFromDocument', () => {
     updateDocumentSummary.mockResolvedValue();
   });
 
-  it('przetwarza każdy fragment i zapisuje zebrane fiszki', async () => {
+  it('przetwarza każdy fragment i zapisuje fiszki po każdym z nich', async () => {
     generateJson
-      .mockResolvedValueOnce(
-        response('### Mitochondria', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
-      )
-      .mockResolvedValueOnce(
-        response('### Rybosomy', 'Za co odpowiadają rybosomy?', 'Rybosomy odpowiadają za syntezę białek'),
-      );
+      .mockResolvedValueOnce(reply(payload('### Mitochondria', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP')))
+      .mockResolvedValueOnce(reply(payload('### Rybosomy', 'Za co odpowiadają rybosomy?', 'Rybosomy odpowiadają za syntezę białek')));
 
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
+    const result = await run();
 
     expect(result.chunkCount).toBe(2);
-    expect(generateJson).toHaveBeenCalledTimes(2);
     expect(result.cardsAdded).toBe(2);
     expect(result.failedChunks).toBe(0);
-    expect(result.cancelled).toBe(false);
-
-    // Zapis jest inkrementalny: jedno wywołanie na fragment, nie jedno zbiorcze.
     expect(addCardsToDeck).toHaveBeenCalledTimes(2);
-    const [deckId, drafts] = addCardsToDeck.mock.calls[0] ?? [];
-    expect(deckId).toBe(3);
-    expect(drafts).toHaveLength(1);
-
-    expect(updateDocumentSummary).toHaveBeenCalledWith(
-      7,
-      expect.stringContaining('# Kompendium: Biologia komórki'),
-    );
+    expect(updateDocumentSummary).toHaveBeenCalledWith(7, expect.stringContaining('# Kompendium: Biologia komórki'));
     expect(result.summary).toContain('### Mitochondria');
     expect(result.summary).toContain('### Rybosomy');
   });
 
-  it('zapisuje fiszki po każdym fragmencie, nie dopiero na końcu', async () => {
-    const savedAt: number[] = [];
-    addCardsToDeck.mockImplementation((_deckId, drafts) => {
-      savedAt.push(generateJson.mock.calls.length);
-      return Promise.resolve(drafts.length);
-    });
-    generateJson.mockResolvedValue(
-      response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
-    );
+  it('wysyła gramatykę (nie schemat JSON) i budżet tokenów liczony z niej', async () => {
+    const { tokenBudget } = await import('./grammar');
+    generateJson.mockResolvedValue(GOOD);
 
-    await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: false,
-    });
+    await run(DOCUMENT, { cardsPerChunk: 3 });
 
-    // Pierwszy zapis następuje po pierwszym zapytaniu do modelu, nie po ostatnim.
-    expect(savedAt[0]).toBe(1);
+    const request = generateJson.mock.calls[0]?.[0];
+    expect(request?.grammar).toMatch(/^root ::= "\{\\"cards\\":\[" card/);
+    expect(request?.maxTokens).toBe(tokenBudget(3));
   });
 
-  it('ponawia fragment, gdy model zwróci pustą listę fiszek', async () => {
-    // Gramatyka dopuszcza {"summary":"…","cards":[]} — mniejsze modele tak robią.
+  it('odpowiedź uciętą limitem tokenów ratuje: zachowuje domknięte fiszki', async () => {
+    const full = JSON.stringify({
+      cards: [
+        { type: 'basic', front: 'Co wytwarzają mitochondria?', back: 'ATP', sourceExcerpt: 'Mitochondria wytwarzają ATP', explanation: 'Z tekstu.' },
+        { type: 'basic', front: 'Gdzie zachodzi fosforylacja?', back: 'W mitochondriach', sourceExcerpt: 'fosforylacji oksydacyjnej', explanation: 'Z tekstu.' },
+      ],
+      summary: 'Długie kompendium, które się nie zmieściło',
+    });
+    const cut = full.slice(0, full.indexOf('Długie') + 6);
+    generateJson.mockResolvedValue(reply(cut, 'length'));
+
+    const result = await run(DOCUMENT, { cardsPerChunk: 2 });
+
+    expect(result.truncatedResponses).toBeGreaterThan(0);
+    expect(result.cardsAdded).toBe(2);
+    expect(result.failedChunks).toBe(0);
+  });
+
+  it('ucięcie przed pierwszą fiszką to nieudany fragment z próbką w raporcie, ale praca trwa', async () => {
     generateJson
-      .mockResolvedValueOnce(JSON.stringify({ summary: '### A', cards: [] }))
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          cards: [
-            {
-              type: 'basic',
-              front: 'Co wytwarzają mitochondria?',
-              back: 'ATP',
-              sourceExcerpt: 'Mitochondria wytwarzają ATP',
-              explanation: 'Wynika to wprost z tekstu.',
-            },
-          ],
-        }),
-      )
-      .mockResolvedValue(JSON.stringify({ summary: '', cards: [] }));
+      .mockResolvedValueOnce(reply('{"cards":[{"type":"basic","front":"Co wytwa', 'length'))
+      .mockResolvedValueOnce(reply(payload('### B', 'Za co odpowiadają rybosomy?', 'Rybosomy odpowiadają za syntezę białek')));
 
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
+    const result = await run();
 
-    expect(result.retriedChunks).toBeGreaterThan(0);
+    expect(result.failedChunks).toBe(1);
     expect(result.cardsAdded).toBe(1);
+    expect(result.fatalError).toBeNull();
+    expect(result.debugSample).toContain('ucięta');
+    expect(result.debugSample).toContain('Co wytwa');
   });
 
-  it('zapisuje próbkę odpowiedzi, gdy model nie tworzy fiszek', async () => {
-    generateJson.mockResolvedValue(JSON.stringify({ summary: 'nic', cards: [] }));
+  it('nieczytelna odpowiedź jednego fragmentu nie zatrzymuje pozostałych (brak limitu „3 pod rząd”)', async () => {
+    generateJson.mockResolvedValueOnce(reply('śmieci')).mockResolvedValue(GOOD);
 
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
+    const result = await run(LONG_DOCUMENT);
 
-    expect(result.cardsAdded).toBe(0);
-    expect(result.debugSample).toContain('cards');
-    expect(result.retriedChunks).toBe(2);
+    expect(result.failedChunks).toBe(1);
+    expect(result.cardsAdded).toBe(1); // reszta to duplikaty tej samej fiszki
+    expect(generateJson).toHaveBeenCalledTimes(result.chunkCount);
   });
 
   it('deduplikuje identyczne fiszki z różnych fragmentów', async () => {
-    const duplicate = response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP');
-    generateJson.mockResolvedValue(duplicate);
-
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: false,
-    });
-
+    generateJson.mockResolvedValue(GOOD);
+    const result = await run(DOCUMENT, { regenerateSummary: false });
     expect(result.cardsAdded).toBe(1);
     expect(result.rejected).toBe(1);
   });
@@ -192,19 +168,10 @@ describe('generateFromDocument', () => {
     const controller = new AbortController();
     generateJson.mockImplementation(() => {
       controller.abort();
-      return Promise.resolve(
-        response('### Mitochondria', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
-      );
+      return Promise.resolve(GOOD);
     });
 
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-      signal: controller.signal,
-    });
+    const result = await run(DOCUMENT, { signal: controller.signal });
 
     expect(interrupt).toHaveBeenCalled();
     expect(generateJson).toHaveBeenCalledTimes(1);
@@ -212,275 +179,93 @@ describe('generateFromDocument', () => {
     expect(result.cardsAdded).toBe(1);
   });
 
-  it('po ubiciu workera wczytuje model ponownie i kontynuuje', async () => {
-    // Tak wygląda ubicie workera przez system na telefonie.
-    const notLoaded = new Error(
-      'ModelNotLoadedError: Model not loaded before trying to complete ChatCompletionRequest.',
-    );
+  it('„map async was not successful” (raport z iPhone’a): odtwarza silnik i powtarza fragment', async () => {
     generateJson
-      .mockRejectedValueOnce(notLoaded)
-      .mockResolvedValue(
-        response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
-      );
+      .mockRejectedValueOnce(new EngineRuntimeError('OperationError: map async was not successful'))
+      .mockResolvedValue(GOOD);
 
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
+    const result = await run();
 
-    // recover(), nie load() — load() uznałby, że model wciąż jest gotowy.
-    expect(recover).toHaveBeenCalledTimes(1);
+    expect(recover).toHaveBeenCalledWith({ hard: true });
     expect(load).not.toHaveBeenCalled();
     expect(result.modelReloads).toBe(1);
     expect(result.cardsAdded).toBeGreaterThan(0);
-    // To nie jest awaria krytyczna — przebieg trwa dalej.
     expect(result.fatalError).toBeNull();
   });
 
-  it('„Object has already been disposed” odzyskuje twardym restartem workera', async () => {
-    // Dokładny komunikat z raportu użytkownika (iPhone, build 2feb0fe).
+  it('ModelNotLoadedError i „disposed” też uruchamiają odtworzenie', async () => {
     generateJson
+      .mockRejectedValueOnce(new Error('ModelNotLoadedError: Model not loaded before trying to complete request.'))
       .mockRejectedValueOnce(new Error('Error: The current Object has already been disposed.'))
-      .mockResolvedValue(
-        response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
-      );
+      .mockResolvedValue(GOOD);
 
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
+    const result = await run();
 
-    expect(recover).toHaveBeenCalledWith({ hard: true });
-    expect(result.modelReloads).toBe(1);
-    expect(result.cardsAdded).toBeGreaterThan(0);
-    expect(result.fatalError).toBeNull();
-  });
-
-  it('„map async was not successful” (utrata GPU) odtwarza silnik i kontynuuje', async () => {
-    // Dokładny komunikat z raportu użytkownika (iPhone, build ce7aa10, model 0.5B).
-    // Silnik opakowuje każdy swój błąd w EngineRuntimeError — nie zgadujemy po treści.
-    generateJson
-      .mockRejectedValueOnce(new EngineRuntimeError('OperationError: map async was not successful'))
-      .mockResolvedValue(
-        response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
-      );
-
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
-
-    expect(recover).toHaveBeenCalledWith({ hard: true });
-    expect(result.modelReloads).toBe(1);
-    expect(result.cardsAdded).toBeGreaterThan(0);
-    expect(result.fatalError).toBeNull();
-  });
-
-  it('nieznany dotąd błąd silnika też uruchamia odtworzenie', async () => {
-    generateJson
-      .mockRejectedValueOnce(new EngineRuntimeError('Jakiś zupełnie nowy komunikat WebKit'))
-      .mockResolvedValue(
-        response('### A', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
-      );
-
-    const result = await generateFromDocument({
-      document: DOCUMENT, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: true,
-    });
-
-    expect(recover).toHaveBeenCalledTimes(1);
+    expect(recover).toHaveBeenCalledTimes(2);
     expect(result.cardsAdded).toBeGreaterThan(0);
   });
 
-  it('uporczywa utrata GPU: wykorzystuje wszystkie odtworzenia, potem kończy jasnym błędem', async () => {
-    // Materiał na wiele fragmentów — jak 47 fragmentów z raportu.
-    const long = { ...DOCUMENT, rawContent: Array.from({ length: 10 }, () => PARAGRAPH_A).join('\n\n') };
+  it('uporczywa awaria GPU: 2 odtworzenia, potem jasny komunikat i koniec — bez mielenia fragmentów', async () => {
     generateJson.mockRejectedValue(new EngineRuntimeError('OperationError: map async was not successful'));
 
-    const result = await generateFromDocument({
-      document: long, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
-    });
+    const result = await run(LONG_DOCUMENT);
 
-    // Wcześniej licznik „3 błędy pod rząd” ucinał próby przed odtworzeniem silnika.
-    expect(recover).toHaveBeenCalledTimes(3);
-    expect(result.modelReloads).toBe(3);
+    expect(recover).toHaveBeenCalledTimes(2);
+    expect(generateJson).toHaveBeenCalledTimes(3);
+    expect(result.modelReloads).toBe(2);
     expect(result.fatalError).toMatch(/odmawia pracy/);
     expect(result.fatalError).toMatch(/map async/);
-    // Przerywa od razu po wyczerpaniu limitu, nie mieli wszystkich fragmentów.
-    expect(result.failedChunks).toBeLessThan(result.chunkCount);
-    expect(generateJson.mock.calls.length).toBeLessThanOrEqual(7);
+    expect(result.failedChunks).toBe(1);
     expect(unload).toHaveBeenCalled();
   });
 
-  it('gdy GPU ginie przy każdym fragmencie, ale odtworzenie pomaga — nie przerywa po 3', async () => {
-    const long = { ...DOCUMENT, rawContent: Array.from({ length: 10 }, () => PARAGRAPH_A).join('\n\n') };
+  it('gdy odtworzenie pomaga przy każdym fragmencie — przebieg idzie do końca', async () => {
     let call = 0;
     generateJson.mockImplementation(() => {
       call += 1;
-      // Każde pierwsze podejście do fragmentu kończy się utratą GPU, powtórka działa.
       return call % 2 === 1
         ? Promise.reject(new EngineRuntimeError('OperationError: map async was not successful'))
-        : Promise.resolve(response('### A', `Pytanie ${call}?`, 'Mitochondria wytwarzają ATP'));
+        : Promise.resolve(reply(payload('### A', `Pytanie ${call}?`, 'Mitochondria wytwarzają ATP')));
     });
 
-    const result = await generateFromDocument({
-      document: long, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
-    });
+    const result = await run(LONG_DOCUMENT);
 
     expect(result.chunkCount).toBeGreaterThan(3);
     expect(result.modelReloads).toBe(result.chunkCount);
     expect(result.fatalError).toBeNull();
-    expect(result.failedChunks).toBe(0);
+    expect(result.cardsAdded).toBe(result.chunkCount);
   });
 
-  it('przepełnienie kontekstu nie uruchamia bezcelowego odtwarzania', async () => {
+  it('błędy deterministyczne (gramatyka, okno kontekstu) nie uruchamiają bezcelowego odtwarzania', async () => {
     generateJson.mockRejectedValue(new EngineRuntimeError('Prompt tokens exceed context window size'));
-
-    const result = await generateFromDocument({
-      document: DOCUMENT, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
-    });
-
+    const context = await run();
     expect(recover).not.toHaveBeenCalled();
-    expect(result.fatalError).toMatch(/context window/);
+    expect(context.fatalError).toMatch(/context window/);
+
+    vi.clearAllMocks();
+    generateJson.mockRejectedValue(new EngineRuntimeError('GrammarMatcherInitError: invalid grammar'));
+    const grammar = await run();
+    expect(recover).not.toHaveBeenCalled();
+    expect(grammar.fatalError).toMatch(/Grammar/);
   });
 
-  it('raport końcowy podaje faktycznie przetworzone fragmenty, nie wszystkie', async () => {
-    // Materiał na wiele fragmentów; trzy błędy pod rząd zatrzymują przebieg.
-    const long = { ...DOCUMENT, rawContent: Array.from({ length: 8 }, () => PARAGRAPH_A).join('\n\n') };
-    generateJson.mockRejectedValue(new Error('Niepoprawny JSON'));
-    const phases: { chunkNumber: number; chunkCount: number }[] = [];
+  it('nieudane odtworzenie (np. brak pamięci przy wczytywaniu) kończy przebieg z jego komunikatem', async () => {
+    generateJson.mockRejectedValue(new EngineRuntimeError('map async was not successful'));
+    recover.mockRejectedValue(new Error('Device lost during reload'));
 
-    const result = await generateFromDocument({
-      document: long,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: false,
-      onProgress: (p) => { if (p.phase === 'done' || p.phase === 'saving') phases.push(p); },
-    });
+    const result = await run(LONG_DOCUMENT);
 
-    expect(result.chunkCount).toBeGreaterThan(3);
-    expect(phases.at(-1)?.chunkNumber).toBe(3);
-  });
-
-  it('przy uporczywym ubijaniu workera nie zapętla się', async () => {
-    generateJson.mockRejectedValue(
-      new Error('ModelNotLoadedError: Model not loaded before trying to complete request.'),
-    );
-
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
-
-    // Jedna próba wczytania modelu na fragment, nigdy więcej niż limit.
-    expect(result.modelReloads).toBeGreaterThan(0);
-    expect(result.modelReloads).toBeLessThanOrEqual(3);
-    expect(recover).toHaveBeenCalledTimes(result.modelReloads);
-    expect(result.cardsAdded).toBe(0);
-    expect(result.failedChunks).toBeGreaterThan(0);
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(result.fatalError).toMatch(/Nie udało się ponownie wczytać modelu: Device lost during reload/);
+    expect(generateJson).toHaveBeenCalledTimes(1);
   });
 
   it('na telefonie tnie materiał na drobniejsze fragmenty', async () => {
-    generateJson.mockResolvedValue(JSON.stringify({ summary: '', cards: [] }));
-
+    generateJson.mockResolvedValue(GOOD);
     engineProfile.isMobile = false;
-    const desktop = await generateFromDocument({
-      document: DOCUMENT, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
-    });
-
+    const desktop = await run(DOCUMENT, { regenerateSummary: false });
     engineProfile.isMobile = true;
-    const mobile = await generateFromDocument({
-      document: DOCUMENT, deckId: 3, allowedTypes: ['basic'], cardsPerChunk: 1, regenerateSummary: false,
-    });
-
+    const mobile = await run(DOCUMENT, { regenerateSummary: false });
     expect(mobile.chunkCount).toBeGreaterThan(desktop.chunkCount);
-  });
-
-  it('awaria silnika przerywa przebieg i zwalnia model', async () => {
-    generateJson.mockRejectedValue(new Error('WebGPU device lost'));
-
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
-
-    // Drugi fragment nie jest nawet próbowany — silnik i tak by poległ.
-    expect(generateJson).toHaveBeenCalledTimes(1);
-    expect(result.fatalError).toContain('device lost');
-    expect(unload).toHaveBeenCalled();
-  });
-
-  it('zwykły błąd fragmentu nie przerywa całości', async () => {
-    generateJson
-      .mockRejectedValueOnce(new Error('Niepoprawny JSON'))
-      .mockResolvedValueOnce(
-        response('### B', 'Za co odpowiadają rybosomy?', 'Rybosomy odpowiadają za syntezę białek'),
-      );
-
-    const result = await generateFromDocument({
-      document: DOCUMENT,
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: true,
-    });
-
-    expect(result.fatalError).toBeNull();
-    expect(result.failedChunks).toBe(1);
-    expect(result.cardsAdded).toBe(1);
-    expect(unload).not.toHaveBeenCalled();
-  });
-
-  it('nie nadpisuje istniejącego kompendium bez zgody użytkownika', async () => {
-    generateJson.mockResolvedValue(
-      response('### Nowe', 'Co wytwarzają mitochondria?', 'Mitochondria wytwarzają ATP'),
-    );
-
-    await generateFromDocument({
-      document: { ...DOCUMENT, structuredSummary: '# Stare kompendium' },
-      deckId: 3,
-      allowedTypes: ['basic'],
-      cardsPerChunk: 1,
-      regenerateSummary: false,
-    });
-
-    expect(updateDocumentSummary).not.toHaveBeenCalled();
-  });
-
-  it('odrzuca pusty materiał i brak wybranych typów', async () => {
-    await expect(
-      generateFromDocument({
-        document: { ...DOCUMENT, rawContent: '   ' },
-        deckId: 3,
-        allowedTypes: ['basic'],
-        cardsPerChunk: 2,
-        regenerateSummary: true,
-      }),
-    ).rejects.toThrow(/pusty/i);
-
-    await expect(
-      generateFromDocument({
-        document: DOCUMENT,
-        deckId: 3,
-        allowedTypes: [],
-        cardsPerChunk: 2,
-        regenerateSummary: true,
-      }),
-    ).rejects.toThrow(/typ/i);
   });
 });

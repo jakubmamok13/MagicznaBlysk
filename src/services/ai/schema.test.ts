@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  buildGenerationSchema,
   extractJsonObject,
   parseGenerationResponse,
   type ValidationContext,
@@ -15,18 +14,6 @@ const ALL_TYPES: readonly CardType[] = ['basic', 'cloze', 'case'];
 function context(allowedTypes: readonly CardType[] = ALL_TYPES): ValidationContext {
   return { source: SOURCE, allowedTypes, seenFronts: new Set<string>() };
 }
-
-describe('buildGenerationSchema', () => {
-  it('zawiera wymagane pola i dozwolone typy', () => {
-    const parsed = JSON.parse(buildGenerationSchema(['basic', 'cloze'])) as Record<string, unknown>;
-    expect(parsed['required']).toEqual(['summary', 'cards']);
-    const properties = parsed['properties'] as Record<string, Record<string, unknown>>;
-    const items = properties['cards']?.['items'] as Record<string, unknown>;
-    expect(items['required']).toEqual(['type', 'front', 'back', 'sourceExcerpt', 'explanation']);
-    const itemProps = items['properties'] as Record<string, Record<string, unknown>>;
-    expect(itemProps['type']?.['enum']).toEqual(['basic', 'cloze']);
-  });
-});
 
 describe('extractJsonObject', () => {
   it('parsuje czysty JSON', () => {

@@ -49,12 +49,12 @@ Fragment ${input.chunkNumber} z ${input.chunkCount}.
 ${input.chunk}
 --- KONIEC FRAGMENTU ---
 
-Zadania:
-1. Pole "summary": zwięzłe kompendium TEGO fragmentu w markdown (nagłówek ###, 3–6 punktów
-   z definicjami, zależnościami i wnioskami). Bez wstępów typu „W tym fragmencie…”.
-2. Pole "cards": dokładnie ${input.targetCards} ${
-    input.targetCards === 1 ? 'fiszka' : 'fiszek'
-  } wyłącznie na podstawie powyższego fragmentu.
+Zadania (w tej kolejności):
+1. Pole "cards": od 1 do ${input.targetCards} ${
+    input.targetCards === 1 ? 'fiszki' : 'fiszek'
+  } wyłącznie na podstawie powyższego fragmentu — tyle, ile fragment faktycznie zawiera faktów.
+2. Pole "summary": zwięzłe kompendium TEGO fragmentu w markdown (nagłówek ###, 3–5 krótkich
+   punktów). Bez wstępów typu „W tym fragmencie…”.
 
 Dozwolone typy fiszek:
 - ${types}
@@ -64,29 +64,5 @@ Zasady bezwzględne:
 - "sourceExcerpt" to dosłowny cytat (1–2 zdania) skopiowany znak w znak z fragmentu powyżej.
 - "explanation" wyjaśnia, dlaczego odpowiedź jest poprawna (1–2 zdania).
 - Nie powtarzaj tej samej treści w kilku fiszkach i nie wychodź poza fragment.
-- Odpowiedz wyłącznie obiektem JSON zgodnym ze schematem.`;
-}
-
-/**
- * Prompt powtórki: krótki, wyłącznie po polsku i bez zadania pisania
- * kompendium. Mniejsze modele gubią się w długiej, dwujęzycznej instrukcji
- * i zwracają pustą listę fiszek — tutaj zostawiamy im jedno proste zadanie.
- */
-export function buildRetryPrompt(input: ChunkPromptInput): string {
-  const types = input.allowedTypes.join(', ');
-
-  return `Tekst:
-"""
-${input.chunk}
-"""
-
-Napisz ${input.targetCards} fiszek do nauki z powyższego tekstu.
-Dozwolone wartości pola "type": ${types}.
-Dla każdej fiszki:
-- "front": pytanie (dla typu cloze: zdanie z luką w składni {{c1::fraza}}),
-- "back": krótka odpowiedź,
-- "sourceExcerpt": fragment powyższego tekstu skopiowany dosłownie,
-- "explanation": jedno zdanie uzasadnienia.
-
-Pisz po polsku. Tablica "cards" nie może być pusta.`;
+- Odpowiedz wyłącznie obiektem JSON.`;
 }
