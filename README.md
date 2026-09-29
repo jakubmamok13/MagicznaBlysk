@@ -266,6 +266,21 @@ WebLLM zapisuje przyczynę utraty urządzenia tylko do konsoli workera, której 
 widać. Worker (`src/workers/llm.worker.ts`) przekazuje więc `device.lost` i nieprzechwycone błędy
 WebGPU kanałem `BroadcastChannel`; trafiają do raportu jako „Zdarzenia GPU”.
 
+### Gdy iOS zamknie całą kartę
+
+Przy braku pamięci iOS nie zgłasza błędu — zabija kartę („Wielokrotnie wystąpił problem z …”),
+więc kod aplikacji nie ma szansy nic powiedzieć. `lib/crash-guard.ts` zostawia na czas generowania
+znacznik w localStorage (zwykłe zamknięcie karty — `pagehide` — go usuwa). Jeśli przy następnym
+uruchomieniu znacznik wciąż jest, poprzednia sesja zginęła w trakcie pracy modelu:
+
+- na górze aplikacji pojawia się baner z wyjaśnieniem i drogą „wygeneruj na komputerze → Eksportuj /
+  Importuj kopię”,
+- okno generowania ostrzega przed ponowną próbą tym samym modelem (przycisk „Spróbuj mimo to”),
+- licznik awarii modelu zeruje się po udanym generowaniu.
+
+Sprawdzone w przeglądarce przez `kill -9` procesu strony w trakcie generowania — dokładnie tak,
+jak robi to iOS.
+
 ### Raport i diagnostyka
 
 **Kopiuj raport** jest dostępny przy każdym niepowodzeniu — w oknie generowania i na pasku

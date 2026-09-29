@@ -3,6 +3,7 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { BrainCircuit, LayoutDashboard, Settings, WifiOff } from 'lucide-react';
 
+import { CrashNotice } from '@/components/crash-notice';
 import { EngineStatusBadge } from '@/components/engine-panel';
 import { GenerationStrip } from '@/components/generation-progress';
 import { PwaUpdatePrompt } from '@/components/pwa-update';
@@ -69,6 +70,7 @@ export function AppShell(): React.JSX.Element {
           job={generation}
           onOpen={() => navigate(`/documents/${generation.documentId}`)}
         />
+        <CrashNotice />
 
         {!isStudyMode && (
           <header className="sticky top-0 z-40 border-b bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">

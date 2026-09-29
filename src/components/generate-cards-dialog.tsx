@@ -23,6 +23,7 @@ import { GenerationProgressPanel } from '@/components/generation-progress';
 import { useEngine } from '@/hooks/use-engine';
 import { useGeneration } from '@/hooks/use-generation';
 import { CARD_TYPES, type CardType, type StudyDocument } from '@/lib/db';
+import { crashCount } from '@/lib/crash-guard';
 import { CARD_TYPE_META } from '@/lib/labels';
 import { chunkText } from '@/lib/text';
 import { cn, errorMessage, pluralize } from '@/lib/utils';
@@ -58,6 +59,8 @@ export function GenerateCardsDialog({
   const job = useGeneration();
 
   const chunkCount = chunkText(document.rawContent).length;
+  // Ile razy system zamknął już kartę podczas generowania tym modelem na tym urządzeniu.
+  const previousCrashes = crashCount(engine.modelId);
   // Postęp dotyczy tego dokumentu tylko wtedy, gdy zadanie jest właśnie jego.
   const running = job.status === 'running' && job.documentId === document.id;
   const finishedHere = job.status !== 'idle' && job.status !== 'running' && job.documentId === document.id;
@@ -104,6 +107,14 @@ export function GenerateCardsDialog({
           <GenerationProgressPanel job={job} />
         ) : (
           <div className="space-y-4">
+            {previousCrashes > 0 && (
+              <p role="alert" className="rounded-md bg-warning/10 p-2.5 text-xs text-warning">
+                Na tym urządzeniu system {previousCrashes === 1 ? 'raz zamknął' : `${previousCrashes} razy zamknął`}{' '}
+                aplikację podczas generowania tym modelem — zabrakło pamięci. Kolejna próba
+                najpewniej skończy się tak samo. Wygeneruj fiszki na komputerze i przenieś je przez
+                Ustawienia → Eksportuj dane / Importuj kopię albo wybierz w Ustawieniach lżejszy model.
+              </p>
+            )}
             <div className="space-y-2">
               <Label>Typy fiszek</Label>
               <div className="flex flex-wrap gap-2">
@@ -206,7 +217,11 @@ export function GenerateCardsDialog({
                 ) : (
                   <Download className="size-4" />
                 )}
-                {engine.status === 'ready' ? 'Generuj' : 'Uruchom model i generuj'}
+                {previousCrashes > 0
+                  ? 'Spróbuj mimo to'
+                  : engine.status === 'ready'
+                    ? 'Generuj'
+                    : 'Uruchom model i generuj'}
               </Button>
             </>
           )}

@@ -1,4 +1,5 @@
 import type { CardType, DraftCard, StudyDocument } from '@/lib/db';
+import { clearCrashes, markGenerationFinished, markGenerationStarted } from '@/lib/crash-guard';
 import { errorMessage } from '@/lib/utils';
 
 import { llmEngine } from './engine';
@@ -129,6 +130,10 @@ class GenerationStore {
       message: 'Przygotowanie modelu…',
     });
 
+    // Znacznik na wypadek, gdyby system zabił kartę (także już przy wczytywaniu modelu).
+    const modelId = llmEngine.getState().modelId;
+    markGenerationStarted(modelId);
+
     try {
       if (llmEngine.getState().status !== 'ready') {
         const unsubscribe = llmEngine.subscribe(() => {
@@ -220,6 +225,8 @@ class GenerationStore {
       });
     } finally {
       this.controller = null;
+      markGenerationFinished();
+      if (this.job.status === 'done' && this.job.cardsAdded > 0) clearCrashes(modelId);
     }
   }
 

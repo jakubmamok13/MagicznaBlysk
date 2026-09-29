@@ -54,6 +54,10 @@ class FakeWorker {
 }
 vi.stubGlobal('Worker', FakeWorker);
 
+// Testy z workerem i sztucznym zegarem potrafią potrwać, gdy równolegle działa
+// ciężki test xgrammar — domyślne 5 s dawało losowe porażki.
+vi.setConfig({ testTimeout: 30_000 });
+
 /**
  * Przesuwa sztuczny zegar, oddając między krokami prawdziwą turę pętli zdarzeń
  * (dynamiczny import biblioteki kończy się poza sztucznymi timerami).
@@ -64,7 +68,10 @@ async function settleWithFakeTimers(task: Promise<unknown>): Promise<void> {
     () => (settled = true),
     () => (settled = true),
   );
-  for (let step = 0; step < 100 && !settled; step += 1) {
+  // Limit liczony w prawdziwym czasie (Date nie jest podmieniane): stała liczba
+  // kroków bywała za mała, gdy równolegle działały cięższe testy.
+  const deadline = Date.now() + 20_000;
+  while (!settled && Date.now() < deadline) {
     await new Promise((resolve) => setImmediate(resolve));
     await vi.advanceTimersByTimeAsync(500);
   }
@@ -152,6 +159,8 @@ describe('llmEngine.recover', () => {
 
 describe('llmEngine — błędy w trakcie generowania', () => {
   beforeEach(() => {
+    // Gdyby poprzedni test przerwano w trakcie, jego sztuczny zegar nie może zostać.
+    vi.useRealTimers();
     createCompletion.mockReset();
     createEngine.mockReset();
     unloadSpy.mockReset();
