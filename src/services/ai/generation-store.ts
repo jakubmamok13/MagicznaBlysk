@@ -253,7 +253,7 @@ export function describeOutcome(result: {
 }): string | null {
   if (result.cardsAdded === 0) {
     if ((result.modelReloads ?? 0) >= 2) {
-      return 'System raz po raz zwalniał pamięć modelu i przerywał jego pracę. Na tym urządzeniu zabrakło pamięci — wybierz model zużywający najmniej pamięci (Gemma 3 1B), zamknij inne karty, albo wygeneruj fiszki na komputerze i przenieś je kopią zapasową.';
+      return 'System raz po raz zwalniał pamięć modelu i przerywał jego pracę. Na tym urządzeniu zabrakło pamięci — wybierz Llama 3.2 1B (albo eksperymentalną Gemma 3 1B), zamknij inne karty, albo wygeneruj fiszki na komputerze i przenieś je kopią zapasową.';
     }
     if (result.returned === 0 && result.failedChunks >= result.chunkCount) {
       return 'Model nie zwrócił ani jednej fiszki — żaden fragment nie został przetworzony. Spróbuj innego modelu w Ustawieniach.';
@@ -300,7 +300,7 @@ export function describeEngineCrash(reason: string, cardsAdded: number): string 
     return `Sterownik GPU przerwał pracę modelu. ${saved} Wybierz mniejszy model w Ustawieniach, zamknij inne karty i spróbuj ponownie.`;
   }
   if (/out of memory|\boom\b|allocation/i.test(reason)) {
-    return `Zabrakło pamięci GPU. ${saved} Pomaga lżejszy model (Gemma 3 1B) oraz mniejsza liczba fiszek z jednego fragmentu.`;
+    return `Zabrakło pamięci GPU. ${saved} Pomaga lżejszy model (Llama 3.2 1B) oraz mniejsza liczba fiszek z jednego fragmentu.`;
   }
   if (/context window|exceed/i.test(reason)) {
     return `Materiał przekroczył okno kontekstu modelu. ${saved} Zmniejsz liczbę fiszek z jednego fragmentu i spróbuj ponownie.`;

@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "icons": "node scripts/generate-icons.mjs",
     "cert": "node scripts/generate-cert.mjs",
-    "ocr:setup": "node scripts/setup-ocr.mjs"
+    "ocr:setup": "node scripts/setup-ocr.mjs",
+    "check:models": "CHECK_MODELS_ONLINE=1 vitest run src/lib/models.catalog.test.ts"
   },
   "dependencies": {
     "@mlc-ai/web-llm": "^0.2.79",

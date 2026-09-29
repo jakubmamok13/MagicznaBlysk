@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
  * od razu, więc ponowne wczytanie po ubiciu workera było pustym wywołaniem.
  */
 
-const reload = vi.fn<(modelId: string) => Promise<void>>();
+const reload = vi.fn<(modelId: string, chatOpts?: unknown) => Promise<void>>();
 const setInitProgressCallback = vi.fn<(cb: unknown) => void>();
 const createEngine = vi.fn<(...args: unknown[]) => void>();
 const terminated: number[] = [];
@@ -16,7 +16,7 @@ const createCompletionArgs: unknown[] = [];
 const unloadSpy = vi.fn<() => Promise<void>>();
 
 const fakeEngine = {
-  reload: (modelId: string) => reload(modelId),
+  reload: (modelId: string, chatOpts?: unknown) => reload(modelId, chatOpts),
   setInitProgressCallback: (cb: unknown) => setInitProgressCallback(cb),
   unload: () => unloadSpy(),
   interruptGenerate: () => undefined,
@@ -106,7 +106,7 @@ describe('llmEngine.recover', () => {
 
     await engine.recover();
 
-    expect(reload).toHaveBeenCalledWith(modelId);
+    expect(reload).toHaveBeenCalledWith(modelId, { sliding_window_size: -1 });
     expect(engine.getState().status).toBe('ready');
     expect(engine.getState().loadedModelId).toBe(modelId);
   });
@@ -250,6 +250,21 @@ describe('llmEngine — błędy w trakcie generowania', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('opcje wyłączające okno przesuwne trafiają do KAŻDEGO wczytania (inaczej Gemma 3 się nie wczyta)', async () => {
+    const engine = await freshEngine();
+    const { CHAT_OPTIONS } = await import('./engine');
+    expect(CHAT_OPTIONS).toEqual({ sliding_window_size: -1 });
+
+    await engine.load();
+    expect(createEngine.mock.calls[0]?.[3]).toEqual(CHAT_OPTIONS);
+
+    await engine.recover();
+    expect(reload).toHaveBeenLastCalledWith(expect.any(String), CHAT_OPTIONS);
+
+    await engine.recover({ hard: true });
+    expect(createEngine.mock.calls.at(-1)?.[3]).toEqual(CHAT_OPTIONS);
   });
 
   it('zbiera zgłoszenia utraty GPU z workera, pomijając własne zwolnienia', async () => {

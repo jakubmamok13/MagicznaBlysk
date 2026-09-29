@@ -22,6 +22,11 @@ export interface ModelOption {
   recommended?: boolean;
   /** Mieści się w limitach pamięci typowego telefonu. */
   mobileFriendly?: boolean;
+  /**
+   * Nie potwierdzono jeszcze działania na prawdziwym urządzeniu — model jest
+   * dostępny do wyboru, ale nigdy nie jest wybierany automatycznie.
+   */
+  experimental?: boolean;
 }
 
 export const MODEL_OPTIONS: readonly ModelOption[] = [
@@ -45,13 +50,14 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
   },
   {
     id: 'gemma3-1b-it-q4f16_1-MLC',
-    label: 'Gemma 3 1B',
+    label: 'Gemma 3 1B (eksperymentalny)',
     downloadSize: '~0,7 GB',
     vramMb: 711,
     precision: 'f16',
     description:
-      'Najmniej pamięci GPU ze wszystkich (711 MB) i dobra znajomość polskiego — pierwszy wybór na iPhone’a.',
+      'Najmniej pamięci GPU (711 MB). Eksperymentalny: jakość generowania nie jest jeszcze sprawdzona — spróbuj, jeśli Llama 3.2 1B się wysypuje.',
     mobileFriendly: true,
+    experimental: true,
   },
   {
     id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC',
@@ -59,7 +65,8 @@ export const MODEL_OPTIONS: readonly ModelOption[] = [
     downloadSize: '~0,7 GB',
     vramMb: 879,
     precision: 'f16',
-    description: 'Lekki model na telefon i słabsze komputery.',
+    description:
+      'Zalecany na telefon: 879 MB pamięci GPU i potwierdzone działanie na iPhonie w innych projektach WebLLM.',
     mobileFriendly: true,
   },
   {
@@ -155,8 +162,10 @@ export function recommendModel(profile: DeviceProfile): string {
   if (available.length === 0) return DEFAULT_MODEL_ID;
 
   if (profile.isMobile || (profile.memoryGb !== undefined && profile.memoryGb <= 4)) {
-    // Najmniejszy dostępny — na telefonie liczy się, żeby cokolwiek ruszyło.
-    return [...available].sort((a, b) => a.vramMb - b.vramMb)[0]?.id ?? DEFAULT_MODEL_ID;
+    // Najlżejszy SPRAWDZONY model — eksperymentalnych nie wybieramy automatycznie.
+    const proven = available.filter((model) => model.experimental !== true);
+    const pool = proven.length > 0 ? proven : available;
+    return [...pool].sort((a, b) => a.vramMb - b.vramMb)[0]?.id ?? DEFAULT_MODEL_ID;
   }
 
   const recommended = available.find((model) => model.recommended === true);

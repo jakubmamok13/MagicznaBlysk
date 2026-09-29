@@ -51,10 +51,13 @@ describe('recommendModel', () => {
     expect(findModel(recommendModel(DESKTOP_F16))?.recommended).toBe(true);
   });
 
-  it('na telefonie wybiera najmniejszy dostępny model', () => {
+  it('na telefonie wybiera najlżejszy SPRAWDZONY model (eksperymentalne tylko ręcznie)', () => {
     const chosen = findModel(recommendModel(PHONE_F16));
-    const smallest = [...compatibleModels(PHONE_F16)].sort((a, b) => a.vramMb - b.vramMb)[0];
-    expect(chosen?.id).toBe(smallest?.id);
+    const lightestProven = [...compatibleModels(PHONE_F16)]
+      .filter((model) => model.experimental !== true)
+      .sort((a, b) => a.vramMb - b.vramMb)[0];
+    expect(chosen?.id).toBe(lightestProven?.id);
+    expect(chosen?.experimental).not.toBe(true);
   });
 
   it('zawsze zwraca model zgodny z urządzeniem', () => {

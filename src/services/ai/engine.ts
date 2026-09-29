@@ -85,6 +85,19 @@ export interface EngineState {
   gpuEvents: string[];
 }
 
+/**
+ * Opcje przekazywane do KAŻDEGO wczytania modelu.
+ *
+ * `sliding_window_size: -1` — Gemma 3 ma w swojej konfiguracji okno przesuwne
+ * 512 tokenów, a wpis WebLLM ustawia jej okno kontekstu na 4096. WebLLM odrzuca
+ * dwa dodatnie okna naraz (WindowSizeConfigurationError), więc model w ogóle się
+ * nie wczytywał. Wyłączenie okna przesuwnego to dokładnie to, co WebLLM robi
+ * sam w swoich wpisach dla innych takich modeli (np. Mistral 7B); dla modeli bez
+ * okna przesuwnego nic się nie zmienia (u nich i tak jest -1).
+ * Sprawdzenie całego katalogu: `npm run check:models`.
+ */
+export const CHAT_OPTIONS = { sliding_window_size: -1 } as const;
+
 /** Ile ostatnich zdarzeń GPU trzymamy w stanie. */
 const MAX_GPU_EVENTS = 4;
 
@@ -290,12 +303,15 @@ class LLMEngineService {
       for (let attempt = 1; ; attempt += 1) {
         try {
           if (this.engine === null) {
-            this.engine = await webllm.CreateWebWorkerMLCEngine(worker, modelId, {
-              initProgressCallback,
-            });
+            this.engine = await webllm.CreateWebWorkerMLCEngine(
+              worker,
+              modelId,
+              { initProgressCallback },
+              CHAT_OPTIONS,
+            );
           } else {
             this.engine.setInitProgressCallback(initProgressCallback);
-            await this.engine.reload(modelId);
+            await this.engine.reload(modelId, CHAT_OPTIONS);
           }
           break;
         } catch (error) {
@@ -375,7 +391,7 @@ class LLMEngineService {
       if (this.engine !== null && options.hard !== true) {
         try {
           this.engine.setInitProgressCallback(initProgressCallback);
-          await this.engine.reload(modelId);
+          await this.engine.reload(modelId, CHAT_OPTIONS);
           reloaded = true;
         } catch {
           // Worker nie odpowiada poprawnie — przechodzimy do twardego restartu.
@@ -384,9 +400,12 @@ class LLMEngineService {
 
       if (!reloaded) {
         await this.disposeWorker();
-        this.engine = await webllm.CreateWebWorkerMLCEngine(this.ensureWorker(), modelId, {
-          initProgressCallback,
-        });
+        this.engine = await webllm.CreateWebWorkerMLCEngine(
+          this.ensureWorker(),
+          modelId,
+          { initProgressCallback },
+          CHAT_OPTIONS,
+        );
       }
 
       this.setState({
@@ -524,7 +543,7 @@ export function explainLoadError(message: string, profile: DeviceProfile): strin
     lower.includes('allocation')
   ) {
     return profile.isMobile
-      ? `${message}\n\nNa telefonie zabrakło pamięci dla modelu. Wybierz model zużywający najmniej pamięci (Gemma 3 1B), zamknij inne karty i spróbuj ponownie. Część telefonów — zwłaszcza iPhone — ma limit pamięci zbyt niski nawet dla najmniejszych modeli; wtedy fiszki wygeneruj na komputerze i przenieś je kopią zapasową.`
+      ? `${message}\n\nNa telefonie zabrakło pamięci dla modelu. Wybierz Llama 3.2 1B (albo eksperymentalną Gemma 3 1B), zamknij inne karty i spróbuj ponownie. Część telefonów — zwłaszcza iPhone — ma limit pamięci zbyt niski nawet dla najmniejszych modeli; wtedy fiszki wygeneruj na komputerze i przenieś je kopią zapasową.`
       : `${message}\n\nZabrakło pamięci GPU. Wybierz mniejszy model albo zamknij inne aplikacje korzystające z karty graficznej.`;
   }
 

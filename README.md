@@ -93,6 +93,7 @@ Przy pierwszym uruchomieniu kliknij **„Pobierz i uruchom model”** w panelu �
 | `npm run preview` | podgląd builda (z działającym Service Workerem) |
 | `npm run test` | testy jednostkowe (Vitest) |
 | `npm run lint` | ESLint z regułami typowanymi |
+| `npm run check:models` | sprawdza każdy model z katalogu na jego prawdziwej konfiguracji z Hugging Face (walidacja okien jak w WebLLM, istnienie biblioteki WebGPU i wag) — uruchom po każdej zmianie listy modeli |
 | `npm run icons` | ponowne wygenerowanie ikon PWA (`scripts/generate-icons.mjs`) |
 | `npm run cert` | certyfikat lokalny do HTTPS w sieci domowej (`scripts/generate-cert.mjs`) |
 | `npm run build:pages` | build z `404.html` jako fallbackiem dla GitHub Pages |
@@ -346,8 +347,10 @@ i działa bez sieci.
 
 Model językowy na telefonie to najbardziej wymagający element:
 
-- w **Ustawieniach** wybierz **Gemma 3 1B** — według danych WebLLM potrzebuje najmniej pamięci GPU
-  (711 MB). Uwaga: *Qwen 2.5 0.5B* mimo mniejszej liczby parametrów potrzebuje więcej (945 MB),
+- w **Ustawieniach** wybierz **Llama 3.2 1B** (879 MB pamięci GPU) — jego działanie na iPhonie
+  potwierdzono w innych projektach WebLLM. Jeśli i on się wysypuje, spróbuj **Gemma 3 1B
+  (eksperymentalny)** — potrzebuje najmniej pamięci (711 MB), ale jakość generowania nie jest jeszcze
+  sprawdzona. *Qwen 2.5 0.5B* mimo mniejszej liczby parametrów potrzebuje więcej (945 MB),
   bo ma ogromny słownik,
 - iOS ma ostry limit pamięci na kartę — na większości iPhone'ów wczytanie modelu się nie powiedzie;
   realne szanse mają iPady z układami M oraz najnowsze modele iPhone,
@@ -492,12 +495,17 @@ Nie każdy układ graficzny obsługuje te same modele, dlatego lista w panelu je
 
 - **brak rozszerzenia `shader-f16`** (częste na starszych układach mobilnych) — pokazywane są
   wyłącznie warianty **(f32)**; modele f16 nie skompilowałyby się w ogóle,
-- **urządzenie mobilne** — pokazywane są tylko lekkie modele; domyślnie ten o najmniejszym
-  zapotrzebowaniu na pamięć GPU (Gemma 3 1B, 711 MB),
+- **urządzenie mobilne** — pokazywane są tylko lekkie modele; domyślnie najlżejszy **sprawdzony**
+  (Llama 3.2 1B). Modele oznaczone jako eksperymentalne nigdy nie są wybierane automatycznie,
 - **zapamiętany model niezgodny z urządzeniem** jest automatycznie podmieniany na zgodny,
   z informacją w panelu,
 - błędy ładowania (`out of memory`, `device lost`, brak `shader-f16`) są tłumaczone na konkretną
   podpowiedź, co zrobić dalej.
+
+**Gemma 3** ma w konfiguracji okno przesuwne 512 tokenów, a wpis WebLLM ustawia jej okno kontekstu
+na 4096 — WebLLM odrzuca taką parę (`WindowSizeConfigurationError`) i model się nie wczytywał.
+Każde wczytanie dostaje więc `sliding_window_size: -1` (`CHAT_OPTIONS` w `engine.ts`) — tak samo
+WebLLM konfiguruje swoje inne modele z oknem przesuwnym (np. Mistral 7B).
 
 O zapotrzebowaniu na pamięć decyduje nie tylko liczba parametrów — Qwen 2.5 0.5B potrzebuje
 więcej pamięci GPU (945 MB) niż Gemma 3 1B (711 MB) czy Llama 3.2 1B (879 MB). Jeżeli nawet
