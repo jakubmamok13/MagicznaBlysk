@@ -190,8 +190,44 @@ export function parseGenerationResponse(raw: string, context: ValidationContext)
   };
 }
 
-function normalizeCard(raw: RawCard, context: ValidationContext): DraftCard | null {
+/** „Jasne, …”, „Oczywiście! …”, „Oto …” — model mówi do użytkownika zamiast pisać fiszkę. */
+// Tylko ze znakiem interpunkcyjnym po słowie — „Oto przykład…” bywa zwykłą treścią.
+const CHATTY_PREFIX = /^(?:jasne|oczywiście|oczywiscie|oto|pewnie|okej|ok|sure|okay|of course)\s*[,!:]\s*/i;
+
+function cleanField(value: string): string {
+  const withoutChat = value.replace(CHATTY_PREFIX, '').trim();
+  // Pole bez ani jednej litery to śmieci po strukturze JSON (np. `}},{`).
+  if (!/\p{L}/u.test(withoutChat)) return '';
+  const cleaned = withoutChat.charAt(0).toLocaleUpperCase('pl-PL') + withoutChat.slice(1);
+  return cleaned;
+}
+
+function comparable(value: string): string {
+  return value.toLocaleLowerCase('pl-PL').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+/**
+ * Rewers powtarzający awers (np. awers i rewers „Jest organem rady gminy b.”)
+ * nie uczy niczego — fiszka jest bezużyteczna.
+ */
+function backRepeatsFront(front: string, back: string): boolean {
+  const f = comparable(front);
+  const b = comparable(back);
+  if (f.length === 0 || b.length === 0) return true;
+  if (f === b) return true;
+  const [shorter, longer] = f.length < b.length ? [f, b] : [b, f];
+  return longer.includes(shorter) && shorter.length / longer.length > 0.8;
+}
+
+function normalizeCard(rawCard: RawCard, context: ValidationContext): DraftCard | null {
+  const raw: RawCard = {
+    ...rawCard,
+    front: cleanField(rawCard.front),
+    back: cleanField(rawCard.back),
+    explanation: cleanField(rawCard.explanation),
+  };
   if (raw.front.length < 3 || raw.back.length === 0) return null;
+  if (backRepeatsFront(raw.front, raw.back)) return null;
 
   const requestedType = isCardType(raw.type) ? raw.type : 'basic';
   const type = context.allowedTypes.includes(requestedType)

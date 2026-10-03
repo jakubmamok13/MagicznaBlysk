@@ -425,9 +425,7 @@ function ReviewCard({ card, revealed, onToggle }: ReviewCardProps): React.JSX.El
             <div className="flex justify-center">
               <CardTypeBadge type={card.type} />
             </div>
-            <p className="text-balance text-lg font-medium leading-relaxed sm:text-xl">
-              {card.front}
-            </p>
+            <p className={cardTextClass(card.front)}>{card.front}</p>
             <button
               type="button"
               onClick={onToggle}
@@ -439,12 +437,12 @@ function ReviewCard({ card, revealed, onToggle }: ReviewCardProps): React.JSX.El
         </Card>
 
         {/* Rewers */}
-        <Card className="flip-face flip-face-back min-h-[16rem] border-primary/40">
+        <Card className="flip-face flip-face-back min-h-[16rem] overflow-y-auto border-primary/40">
           <CardContent className="flex min-h-[16rem] flex-col justify-center gap-4 p-6 text-center">
             <Badge variant="success" className="mx-auto">
               Odpowiedź
             </Badge>
-            <p className="text-balance text-lg font-medium leading-relaxed sm:text-xl">{card.back}</p>
+            <p className={cardTextClass(card.back)}>{card.back}</p>
             {card.explanation.length > 0 && (
               <p className="border-t pt-3 text-xs leading-relaxed text-muted-foreground">
                 {card.explanation}
@@ -548,3 +546,15 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }): React.JSX.Element 
     </Card>
   );
 }
+
+/**
+ * Tekst fiszki z zachowaniem nowych linii. Wielowierszowy (np. pytanie z testu
+ * z opcjami a/b/c) wyrównujemy do lewej — wyśrodkowana lista jest nieczytelna.
+ */
+function cardTextClass(text: string): string {
+  return cn(
+    'whitespace-pre-line text-lg font-medium leading-relaxed sm:text-xl',
+    text.includes('\n') ? 'text-left' : 'text-balance',
+  );
+}
+

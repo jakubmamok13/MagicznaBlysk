@@ -394,7 +394,7 @@ function CardRow({ card, onEdit, onDelete }: CardRowProps): React.JSX.Element {
             className="min-w-0 flex-1 text-left"
             aria-expanded={expanded}
           >
-            <p className="text-sm font-medium leading-snug">{front}</p>
+            <p className="whitespace-pre-line text-sm font-medium leading-snug">{front}</p>
             {!expanded && (
               <p className="mt-0.5 truncate text-xs text-muted-foreground">
                 {truncate(card.back, 90)}
@@ -417,7 +417,7 @@ function CardRow({ card, onEdit, onDelete }: CardRowProps): React.JSX.Element {
               <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                 Odpowiedź
               </p>
-              <p className="text-sm leading-relaxed">{card.back}</p>
+              <p className="whitespace-pre-line text-sm leading-relaxed">{card.back}</p>
             </div>
             {card.sourceExcerpt.length > 0 && (
               <div>

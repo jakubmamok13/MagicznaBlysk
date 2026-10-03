@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react';
-import { Download, Sparkles, Square, Wand2 } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import { Download, ListChecks, Sparkles, Square, Wand2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -22,7 +22,8 @@ import { useToast } from '@/components/ui/toast';
 import { GenerationProgressPanel } from '@/components/generation-progress';
 import { useEngine } from '@/hooks/use-engine';
 import { useGeneration } from '@/hooks/use-generation';
-import { CARD_TYPES, type CardType, type StudyDocument } from '@/lib/db';
+import { addCardsToDeck, CARD_TYPES, type CardType, type StudyDocument } from '@/lib/db';
+import { detectQuiz, quizQuestionToCard } from '@/lib/quiz';
 import { crashCount } from '@/lib/crash-guard';
 import { CARD_TYPE_META } from '@/lib/labels';
 import { chunkText } from '@/lib/text';
@@ -75,6 +76,39 @@ export function GenerateCardsDialog({
    * Zadanie żyje w store poza Reactem — okno można zamknąć, a proces trwa
    * dalej i pokazuje się w pasku nagłówka.
    */
+  /**
+   * Test z kluczem odpowiedzi rozkładamy deterministycznie — każde pytanie to
+   * fiszka. Model językowy gubił pytania i mylił odpowiedzi w takim materiale.
+   */
+  const quiz = useMemo(() => detectQuiz(document.rawContent), [document.rawContent]);
+  const [creatingFromQuiz, setCreatingFromQuiz] = useState(false);
+
+  const handleQuiz = useCallback(async (): Promise<void> => {
+    if (quiz === null) return;
+    setCreatingFromQuiz(true);
+    try {
+      const added = await addCardsToDeck(deckId, quiz.questions.map(quizQuestionToCard));
+      const skipped = quiz.questions.length - added;
+      toast({
+        title: `Dodano ${pluralize(added, 'fiszkę', 'fiszki', 'fiszek')} z testu`,
+        description: [
+          skipped > 0 ? `${skipped} już było w talii.` : '',
+          quiz.missing.length > 0
+            ? `Nie udało się odczytać pytań: ${quiz.missing.join(', ')} — dodaj je ręcznie.`
+            : '',
+        ]
+          .filter(Boolean)
+          .join(' ') || undefined,
+        variant: 'success',
+      });
+      onOpenChange(false);
+    } catch (error) {
+      toast({ title: 'Nie udało się dodać fiszek', description: errorMessage(error), variant: 'error' });
+    } finally {
+      setCreatingFromQuiz(false);
+    }
+  }, [deckId, onOpenChange, quiz, toast]);
+
   const handleRun = useCallback((): void => {
     void generationStore
       .start({ document, deckId, allowedTypes: types, cardsPerChunk, regenerateSummary })
@@ -107,6 +141,24 @@ export function GenerateCardsDialog({
           <GenerationProgressPanel job={job} />
         ) : (
           <div className="space-y-4">
+            {quiz !== null && (
+              <div className="space-y-2 rounded-md border border-primary/40 bg-primary/10 p-3 text-sm">
+                <p className="font-medium">
+                  Wykryto test z kluczem odpowiedzi — {pluralize(quiz.questions.length, 'pytanie', 'pytania', 'pytań')}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Każde pytanie stanie się fiszką: na awersie pytanie z opcjami, na rewersie poprawne
+                  odpowiedzi z klucza. Bez modelu AI — nic nie jest pomijane, odpowiedzi są dokładne,
+                  działa od razu także na telefonie.
+                  {quiz.missing.length > 0 &&
+                    ` Nie udało się odczytać pytań: ${quiz.missing.join(', ')}.`}
+                </p>
+                <Button size="sm" onClick={() => void handleQuiz()} disabled={creatingFromQuiz}>
+                  <ListChecks className="size-4" />
+                  Utwórz {pluralize(quiz.questions.length, 'fiszkę', 'fiszki', 'fiszek')} z testu (bez AI)
+                </Button>
+              </div>
+            )}
             {previousCrashes > 0 && (
               <p role="alert" className="rounded-md bg-warning/10 p-2.5 text-xs text-warning">
                 Na tym urządzeniu system {previousCrashes === 1 ? 'raz zamknął' : `${previousCrashes} razy zamknął`}{' '}

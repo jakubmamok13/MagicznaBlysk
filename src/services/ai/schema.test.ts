@@ -30,6 +30,55 @@ describe('extractJsonObject', () => {
   });
 });
 
+describe('parseGenerationResponse — błędy z raportu z iPada', () => {
+  const source =
+    'Wójt: a. Jest organem wykonawczym gminy b. Jest organem rady gminy b. Domniemanie kompetencji na rzecz organu wykonawczego jednostki samorządu terytorialnego występuje na poziomie: a. gminy';
+  const parse = (card: Record<string, string>): ReturnType<typeof parseGenerationResponse> =>
+    parseGenerationResponse(JSON.stringify({ cards: [card], summary: '' }), {
+      source,
+      allowedTypes: ['basic'],
+      seenFronts: new Set<string>(),
+    });
+
+  it('odrzuca fiszkę, której rewers powtarza awers („Jest organem rady gminy b.”)', () => {
+    const result = parse({
+      type: 'basic',
+      front: 'Jest organem rady gminy b.',
+      back: 'Jest organem rady gminy b.',
+      sourceExcerpt: 'Jest organem rady gminy b.',
+      explanation: '',
+    });
+    expect(result.cards).toHaveLength(0);
+    expect(result.rejections.incomplete).toBe(1);
+  });
+
+  it('usuwa „Jasne, …” z pytania i śmieci JSON („}},{”) z wyjaśnienia', () => {
+    const result = parse({
+      type: 'basic',
+      front: 'Jasne, co to jest kompetencja na rzecz organu wykonawczego jednostki samorządu terytorialnego?',
+      back: 'Domniemanie kompetencji na rzecz organu wykonawczego występuje na poziomie gminy.',
+      sourceExcerpt: 'Domniemanie kompetencji na rzecz organu wykonawczego jednostki samorządu terytorialnego występuje na poziomie: a. gminy',
+      explanation: '}},{',
+    });
+    expect(result.cards[0]?.front).toBe(
+      'Co to jest kompetencja na rzecz organu wykonawczego jednostki samorządu terytorialnego?',
+    );
+    expect(result.cards[0]?.explanation).toBe('');
+  });
+
+  it('nie rusza zwykłych zdań zaczynających się od „Oto” czy „Dobrze”', () => {
+    const result = parse({
+      type: 'basic',
+      front: 'Oto przykład organu wykonawczego gminy — kto to?',
+      back: 'Wójt',
+      sourceExcerpt: 'Jest organem wykonawczym gminy',
+      explanation: 'Dobrze to zapamiętać.',
+    });
+    expect(result.cards[0]?.front).toBe('Oto przykład organu wykonawczego gminy — kto to?');
+    expect(result.cards[0]?.explanation).toBe('Dobrze to zapamiętać.');
+  });
+});
+
 describe('parseGenerationResponse', () => {
   it('przyjmuje poprawną fiszkę z dosłownym cytatem', () => {
     const raw = JSON.stringify({

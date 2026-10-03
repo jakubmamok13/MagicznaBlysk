@@ -177,6 +177,23 @@ Rozpoznany tekst zawsze warto przejrzeć — OCR bywa omylny, zwłaszcza przy
 słabej jakości skanu.
 
 
+## Testy z kluczem odpowiedzi (bez AI)
+
+Materiał w postaci testu wyboru z kluczem („1. Pytanie: a. … b. … c. … Odpowiedzi: 1a, 2c, 3-, 4ab”)
+jest rozkładany **deterministycznie** (`lib/quiz.ts`): każde pytanie staje się jedną fiszką —
+na awersie pytanie z opcjami, na rewersie poprawne odpowiedzi z klucza („-” = żadna). Model
+językowy czytający taki materiał we fragmentach gubił pytania, mylił odpowiedzi i robił fiszki
+z pojedynczych opcji; parser niczego nie pomija i działa bez WebGPU, więc także na iPhonie.
+
+- pytania szukane są kolejno według numerów z klucza, więc liczby w treści („w terminie 7 dni”)
+  nie rozbijają pytań,
+- obsługiwanych jest kilka testów w jednym pliku (każdy z własnym kluczem i numeracją),
+- pytania, których nie da się odczytać, są wymienione z numerami, zamiast cicho zniknąć,
+- okno generowania wykrywa taki test i proponuje „Utwórz N fiszek z testu (bez AI)”.
+
+Znaki wodne serwisów z notatkami („Downloaded by … (e-mail)”, `lOMoARcPSD|…`) są usuwane przed
+parsowaniem i przed podziałem materiału dla modelu.
+
 ## Potok AI
 
 1. **Podział materiału** (`lib/text.ts`) na fragmenty ≤ 1800 znaków (na telefonie 1100), na granicach akapitów i zdań
@@ -295,6 +312,12 @@ Zerwane połączenie w trakcie pobierania wag (częste na komórce) jest wznawia
 (do 5 prób) — WebLLM trzyma pobrane części w cache, więc kolejna próba kontynuuje od miejsca
 przerwania. Rozpoznawane są komunikaty wszystkich przeglądarek (Chrome: „Failed to fetch”,
 Safari: „Load failed”, Firefox: „NetworkError”).
+
+### Odrzucanie bezużytecznych fiszek z AI
+
+- rewers powtarzający awers (np. awers i rewers „Jest organem rady gminy b.”) — fiszka odrzucona,
+- wstęp skierowany do użytkownika („Jasne, …”, „Oczywiście! …”) — usuwany,
+- pole bez ani jednej litery (np. `}},{` — pozostałość struktury JSON) — czyszczone.
 
 ### Dlaczego powstało mniej fiszek, niż oczekiwano
 

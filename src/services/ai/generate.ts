@@ -5,6 +5,7 @@ import {
   type DraftCard,
   type StudyDocument,
 } from '@/lib/db';
+import { stripWatermarks } from '@/lib/quiz';
 import { chunkText } from '@/lib/text';
 import { errorMessage } from '@/lib/utils';
 
@@ -174,7 +175,11 @@ export async function generateFromDocument(options: GenerationOptions): Promise<
   });
 
   const isMobile = llmEngine.getState().profile.isMobile;
-  const chunks = chunkText(document.rawContent, isMobile ? MOBILE_CHUNK_SIZE : GENERATION_CHUNK_SIZE);
+  // Znaki wodne serwisów z notatkami („Downloaded by …”) nie mogą trafić do fiszek.
+  const chunks = chunkText(
+    stripWatermarks(document.rawContent),
+    isMobile ? MOBILE_CHUNK_SIZE : GENERATION_CHUNK_SIZE,
+  );
   if (chunks.length === 0) {
     throw new Error('Materiał jest pusty — dodaj treść, z której mają powstać fiszki.');
   }
